@@ -51,7 +51,10 @@ function eventToRow_(ev) {
   row[COL.PREPARATION] = ev.preparation;
   row[COL.CALENDAR_EVENT_ID] = ev.calendarEventId;
   row[COL.SLACK_CHANNEL] = ev.slackChannel;
-  row[COL.SLACK_TS] = ev.slackTs;
+  // Slackのts（例: 1784563559.123456）はシートに数値として解釈されると
+  // 小数部の桁が失われ、chat.update が message_not_found になる。
+  // 先頭にアポストロフィを付けて必ず「文字列」として保存する（表示・読み出しには含まれない）
+  row[COL.SLACK_TS] = ev.slackTs ? "'" + ev.slackTs : '';
   row[COL.EDIT_URL] = ev.editUrl;
   row[COL.CREATED_AT] = ev.createdAt;
   row[COL.UPDATED_AT] = ev.updatedAt;

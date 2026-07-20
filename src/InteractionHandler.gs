@@ -58,6 +58,17 @@ function handleInteraction_(payload) {
     return;
   }
 
+  // 告知の再描画には、押されたメッセージ自身の channel/ts（ペイロード由来）を
+  // 正として使う。シート上のtsが数値化の桁落ちで壊れていても再描画が失敗しない。
+  // ズレを検知したらロック外でシートへ正しい値を書き戻して自己修復する
+  let tsRepairNeeded = false;
+  if (payload.channel && payload.message &&
+      (ev.slackChannel !== payload.channel.id || ev.slackTs !== payload.message.ts)) {
+    ev.slackChannel = payload.channel.id;
+    ev.slackTs = payload.message.ts;
+    tsRepairNeeded = true;
+  }
+
   // 中止済みイベントは処理しない
   if (isCancelledStatus_(ev.status)) {
     respondEphemeral_(responseUrl, ':no_entry: このイベントは中止になったため、操作できません。');
@@ -101,6 +112,11 @@ function handleInteraction_(payload) {
   respondEphemeral_(responseUrl, result.feedback);
   if (result.changed) {
     refreshAnnouncement_(config, ev);
+  }
+  if (tsRepairNeeded) {
+    // 壊れたts（数値化された過去データ）を正しい値で上書きし、
+    // 中止・編集通知などボタン以外の経路でも参照できるようにする
+    updateEvent_(config, ev);
   }
   if (result.promoted) {
     sendDirectMessage_(
