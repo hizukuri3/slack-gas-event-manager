@@ -23,8 +23,35 @@ function setupTriggers() {
       .forForm(formId)
       .onFormSubmit()
       .create();
+    applyFormHints_(formId);
   });
   initializeSheets();
+}
+
+/**
+ * フォームの設問に入力ヒント（説明文）を自動設定する。
+ * 特に無料版Meetの60分制限と予定分割の挙動を、入力時点で主催者に伝える。
+ */
+function applyFormHints_(formId) {
+  const form = FormApp.openById(formId);
+  form.getItems().forEach(function (item) {
+    const title = item.getTitle();
+    if (title === FORM_TITLES.FORMAT) {
+      item.setHelpText(
+        '①オンライン・自動発行は無料版Google Meetを使用します。' +
+        '3人以上の通話は60分で自動切断されるため、60分を超えるイベントは' +
+        'カレンダー予定が60分ごとに自動分割されます（Meet URLは全予定共通。' +
+        '切れたら同じURLで再入室）。切断なしで開催したい場合は' +
+        '②を選び、時間制限のないツールのURLを入力してください。'
+      );
+    }
+    if (title === FORM_TITLES.LOCATION) {
+      item.setHelpText(
+        '開催形式が「②オンライン・手動URL」「③オフライン・対面」の場合は必須です。' +
+        '「①オンライン・自動発行」の場合は空欄のままにしてください（Meet URLが自動で入ります）。'
+      );
+    }
+  });
 }
 
 /** フォーム送信時のメイン処理（新規登録と回答編集の両方が飛んでくる） */
@@ -130,9 +157,9 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
     updatedAt: now
   };
 
-  // 1. カレンダー登録（自動発行の場合はMeet URLを取得して場所に採用）
-  const calendarResult = createCalendarEvent_(config, ev);
-  ev.calendarEventId = calendarResult.calendarEventId;
+  // 1. カレンダー登録（自動発行の場合はMeet URLを取得して場所に採用。60分超なら分割）
+  const calendarResult = createCalendarEvents_(config, ev);
+  ev.calendarEventId = calendarResult.calendarEventIds.join(',');
   if (isAutoMeet_(ev.format) && calendarResult.meetUrl) {
     ev.location = calendarResult.meetUrl;
   }
@@ -150,17 +177,17 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
 
   // 4. カレンダー説明欄に概要・参加者確認URL・Slackパーマリンクを書き込み
   const permalink = ts ? getPermalink_(config, config.slackChannelId, ts) : '';
-  patchCalendarDescription_(
-    config, ev.calendarEventId,
-    buildCalendarDescription_(ev, participantsUrl, permalink)
-  );
+  patchCalendarDescriptions_(config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
 
   // 5. 主催者へ回答編集用URLをDMで通知
-  sendDirectMessage_(
-    config, ev.organizer,
+  let dmText =
     ':white_check_mark: イベント「' + ev.title + '」を登録しました。\n' +
-    '内容の変更・中止はこちらの回答編集用URLから行ってください:\n' + ev.editUrl
-  );
+    '内容の変更・中止はこちらの回答編集用URLから行ってください:\n' + ev.editUrl;
+  if (needsMeetSplit_(ev)) {
+    dmText += '\n\n:bulb: 60分を超えるオンラインイベントのため、無料版Meetの制限（3人以上は60分で切断）に合わせて' +
+      'カレンダー予定を' + calendarEventIds_(ev).length + 'つに分割しました。Meet URLは全予定共通です。';
+  }
+  sendDirectMessage_(config, ev.organizer, dmText);
 }
 
 // ==================== 回答編集（変更・中止） ====================
@@ -168,6 +195,11 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
 function handleEventEdit_(config, existing, answers) {
   const now = new Date();
   const ev = existing;
+  // 日時・開催形式が変わった場合はカレンダー予定の作り直しが必要（分割数が変わり得るため）
+  const scheduleChanged =
+    existing.start.getTime() !== answers.start.getTime() ||
+    existing.end.getTime() !== answers.end.getTime() ||
+    existing.format !== answers.format;
   ev.title = answers.title;
   ev.organizer = answers.organizer;
   ev.start = answers.start;
@@ -192,25 +224,26 @@ function handleEventEdit_(config, existing, answers) {
   const participantsUrl = buildParticipantsPageUrl_(config, ev.eventId);
   const permalink = ev.slackTs ? getPermalink_(config, ev.slackChannel, ev.slackTs) : '';
 
+  // カレンダー更新（日時・形式変更時は作り直し。ev の calendarEventId / location が更新される）
+  updateCalendarEvents_(config, ev, scheduleChanged);
+  patchCalendarDescriptions_(config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
   updateEvent_(config, ev);
-  updateCalendarEvent_(config, ev, participantsUrl, permalink);
   // 定員増加時：空いた枠の分だけキャンセル待ちを先着順で自動繰り上げ（本人へDM通知）
   promoteWaitlistedUpToCapacity_(config, ev);
   refreshAnnouncement_(config, ev);
   // 定員減少時：既存の参加者リストは維持したまま、以降の新規受付は
   // ボタン処理側の「現在人数 >= 定員」判定で自動的にキャンセル待ちへ回る。
 
-  sendDirectMessage_(
-    config, ev.organizer,
-    ':pencil2: イベント「' + ev.title + '」の内容を更新しました。'
-  );
+  let dmText = ':pencil2: イベント「' + ev.title + '」の内容を更新しました。';
+  if (scheduleChanged && isAutoMeet_(ev.format)) {
+    dmText += '\n:bulb: 日時・開催形式の変更に伴い、Meet URLが再発行されています。最新のURLはSlack告知メッセージをご確認ください。';
+  }
+  sendDirectMessage_(config, ev.organizer, dmText);
 }
 
-/** イベント中止処理：カレンダー削除・シート更新・Slack告知へ【中止】追記 */
+/** イベント中止処理：カレンダー削除（分割予定を含む全件）・シート更新・Slack告知へ【中止】追記 */
 function cancelEvent_(config, ev) {
-  if (ev.calendarEventId) {
-    deleteCalendarEvent_(config, ev.calendarEventId);
-  }
+  deleteCalendarEvents_(config, ev);
   updateEvent_(config, ev); // ステータス「中止」を記録 → 以降のスタンプ検知はスキップされる
 
   if (ev.slackTs) {

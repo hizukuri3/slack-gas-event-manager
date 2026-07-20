@@ -40,16 +40,14 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
   const blocks = [];
 
   // ---- ヘッダー（イベント基本情報）----
-  blocks.push({
-    type: 'section',
-    text: {
-      type: 'mrkdwn',
-      text: ':loudspeaker: *' + titleLabel + '*\n' +
-        ':calendar: 日時: ' + dateLabel + '\n' +
-        ':round_pushpin: 場所: ' + escapeSlackText_(ev.location || '（未定）') + '\n' +
-        ':bust_in_silhouette: 主催: <@' + ev.organizer + '>'
-    }
-  });
+  let headerText = ':loudspeaker: *' + titleLabel + '*\n' +
+    ':calendar: 日時: ' + dateLabel + '\n' +
+    ':round_pushpin: 場所: ' + escapeSlackText_(ev.location || '（未定）') + '\n' +
+    ':bust_in_silhouette: 主催: <@' + ev.organizer + '>';
+  if (needsMeetSplit_(ev)) {
+    headerText += '\n:bulb: 無料版Meetのため60分ごとに接続が切れます。切れたら同じURLから再入室してください。';
+  }
+  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: headerText } });
 
   // ---- 概要・事前準備 ----
   let detail = '*概要・対象者*\n' + escapeSlackText_(ev.description);
