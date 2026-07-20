@@ -74,39 +74,69 @@ const FORM_TITLES = {
 /**
  * スクリプトプロパティを読み込んで返す。
  * 必須キーが未設定の場合は例外を投げてセットアップ漏れを検知する。
+ *
+ * パフォーマンス注意: getProperty()（単数形）は1キーごとに外部ストレージ
+ * への通信が発生し、都度呼び出すとSlackの3秒ルールを圧迫する
+ * （実測: 16回で約1.1秒）。必ず getProperties()（複数形）で全キーを
+ * 1回の通信でまとめて取得すること。
  */
 function getConfig_() {
-  const props = PropertiesService.getScriptProperties();
+  const props = PropertiesService.getScriptProperties().getProperties();
   const config = {
-    slackBotToken: props.getProperty('SLACK_BOT_TOKEN'),               // 例: YOUR_SLACK_BOT_TOKEN
-    slackVerificationToken: props.getProperty('SLACK_VERIFICATION_TOKEN'), // Slack Event検証用（任意だが推奨）
-    managementSpreadsheetId: props.getProperty('MANAGEMENT_SPREADSHEET_ID'), // 例: MANAGEMENT_SPREADSHEET_ID
-    publicSpreadsheetId: props.getProperty('PUBLIC_SPREADSHEET_ID'),   // 例: PUBLIC_SPREADSHEET_ID
-    calendarId: props.getProperty('GOOGLE_CALENDAR_ID'),               // 例: GOOGLE_CALENDAR_ID
-    slackChannelId: props.getProperty('SLACK_CHANNEL_ID'),             // 例: SLACK_CHANNEL_ID
-    formId: props.getProperty('GOOGLE_FORM_ID'),                       // 弟子用イベント登録フォームのID
+    slackBotToken: props['SLACK_BOT_TOKEN'] || null,               // 例: YOUR_SLACK_BOT_TOKEN
+    slackVerificationToken: props['SLACK_VERIFICATION_TOKEN'] || null, // Slack Event検証用（任意だが推奨）
+    managementSpreadsheetId: props['MANAGEMENT_SPREADSHEET_ID'] || null, // 例: MANAGEMENT_SPREADSHEET_ID
+    publicSpreadsheetId: props['PUBLIC_SPREADSHEET_ID'] || null,   // 例: PUBLIC_SPREADSHEET_ID
+    calendarId: props['GOOGLE_CALENDAR_ID'] || null,               // 例: GOOGLE_CALENDAR_ID
+    slackChannelId: props['SLACK_CHANNEL_ID'] || null,             // 例: SLACK_CHANNEL_ID
+    formId: props['GOOGLE_FORM_ID'] || null,                       // 弟子用イベント登録フォームのID
     // 師匠用フォームのID（任意）。設問構成は弟子用と同一にすること。
     // URLは師匠のみに共有し、弟子には公開しない。
-    masterFormId: props.getProperty('MASTER_FORM_ID'),
-    webAppUrl: props.getProperty('WEBAPP_URL'),                        // Webアプリの/exec URL（デプロイ後に登録）
+    masterFormId: props['MASTER_FORM_ID'] || null,
+    webAppUrl: props['WEBAPP_URL'] || null,                        // Webアプリの/exec URL（デプロイ後に登録）
     // 師匠のSlackユーザーID一覧（カンマ区切り）。
     // /event コマンドで師匠用フォームのリンクを返す相手の判定にのみ使用する。
     // イベント種別の判定には使わない（種別は送信元フォームで決まる）。
-    masterUserIds: String(props.getProperty('MASTER_SLACK_USER_IDS') || '')
+    masterUserIds: String(props['MASTER_SLACK_USER_IDS'] || '')
       .split(',')
       .map(function (id) { return id.trim().replace(/^<@/, '').replace(/>$/, '').replace(/^@/, ''); })
-      .filter(function (id) { return id !== ''; })
+      .filter(function (id) { return id !== ''; }),
+    // ---- フォーム事前入力URL用のエントリID ----
+    // /event 応答内で FormApp.openById()（約1秒/回）を使わずに
+    // 文字列結合だけで事前入力URLを組み立てるための固定値。
+    // 値は setupPrefillEntryIds()（SlashCommand.gs・手動実行）で自動登録できる。
+    // 未設定の間は事前入力なしの素のフォームURLが返る（機能は落ちない）。
+    formEntries: {
+      organizer: normalizeEntryId_(props['FORM_ENTRY_ORGANIZER']),   // 「主催者のSlackユーザーID」設問
+      status: normalizeEntryId_(props['FORM_ENTRY_STATUS'])          // 「イベントのステータス」設問
+    },
+    masterFormEntries: {
+      organizer: normalizeEntryId_(props['MASTER_FORM_ENTRY_ORGANIZER']),
+      status: normalizeEntryId_(props['MASTER_FORM_ENTRY_STATUS'])
+    },
+    // ステータス設問で「開催」を表す選択肢の値（フォームの選択肢文字列と完全一致させる）
+    formStatusOpenValue: props['FORM_STATUS_OPEN_VALUE'] || ''
   };
 
   const required = [
     'SLACK_BOT_TOKEN', 'MANAGEMENT_SPREADSHEET_ID', 'PUBLIC_SPREADSHEET_ID',
     'GOOGLE_CALENDAR_ID', 'SLACK_CHANNEL_ID', 'GOOGLE_FORM_ID'
   ];
-  const missing = required.filter(function (key) { return !props.getProperty(key); });
+  const missing = required.filter(function (key) { return !props[key]; });
   if (missing.length > 0) {
     throw new Error('スクリプトプロパティが未設定です: ' + missing.join(', '));
   }
   return config;
+}
+
+/**
+ * エントリIDのプロパティ値を数値ID文字列に正規化する。
+ * 「entry.123456」形式・「123456」形式のどちらで登録されていても受け付け、
+ * 不正な値（空・数値以外）は空文字にして事前入力をスキップさせる。
+ */
+function normalizeEntryId_(value) {
+  const id = String(value || '').trim().replace(/^entry\./, '');
+  return /^\d+$/.test(id) ? id : '';
 }
 
 /**
