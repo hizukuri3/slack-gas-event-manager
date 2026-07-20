@@ -24,23 +24,24 @@ function handleSlashCommand_(params) {
   }
 
   const userId = params.user_id;
-  const generalUrl = buildPrefilledFormUrl_(
-    config.formId, config.formEntries, userId, config.formStatusOpenValue);
 
-  let text =
-    ':spiral_note_pad: *イベント登録フォーム（あなた専用リンク）*\n' +
-    '主催者のSlackユーザーID（<@' + userId + '>）は入力済みです。そのまま残りの項目を入力してください。\n' +
-    generalUrl;
-
-  // 師匠には師匠用フォームのリンクも返す（弟子には非公開）
+  // 師匠には師匠用フォームのリンクのみを返す（弟子には非公開）
   const isMaster = config.masterUserIds.indexOf(userId) !== -1;
   if (isMaster && config.masterFormId) {
     const masterUrl = buildPrefilledFormUrl_(
       config.masterFormId, config.masterFormEntries, userId, config.formStatusOpenValue);
-    text += '\n\n:crown: *師匠イベント用フォーム(師匠専用・URLは共有しないでください)*\n' + masterUrl;
+    return slashResponse_(
+      ':crown: *師匠イベント登録フォーム（あなた専用リンク・URLは共有しないでください）*\n' +
+      '主催者のSlackユーザーID（<@' + userId + '>）は入力済みです。そのまま残りの項目を入力してください。\n' +
+      masterUrl);
   }
 
-  return slashResponse_(text);
+  const generalUrl = buildPrefilledFormUrl_(
+    config.formId, config.formEntries, userId, config.formStatusOpenValue);
+  return slashResponse_(
+    ':spiral_note_pad: *イベント登録フォーム（あなた専用リンク）*\n' +
+    '主催者のSlackユーザーID（<@' + userId + '>）は入力済みです。そのまま残りの項目を入力してください。\n' +
+    generalUrl);
 }
 
 /** スラッシュコマンドへの応答（本人にのみ表示） */
