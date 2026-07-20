@@ -133,12 +133,20 @@ function handleInteraction_(payload) {
       ev.slackTs
     );
   }
+  if (result.fullNotice) {
+    postMessage_(
+      config, ev.slackChannel,
+      ':u6e80: 満席になりました（参加 ' + ev.capacity + '/' + ev.capacity + '名）。' +
+      '以降の参加希望は「キャンセル待ち」として先着順で受け付けます。',
+      ev.slackTs
+    );
+  }
 }
 
 /**
  * 「参加する」ボタン：定員内なら参加、満員ならキャンセル待ちとして受付。
  * ロック内で呼ばれるため、シート操作と判定のみを行い、通知内容は結果として返す。
- * @return {{changed: boolean, feedback: string}}
+ * @return {{changed: boolean, feedback: string, fullNotice: boolean}}
  */
 function handleJoin_(config, ev, userId, displayName) {
   const participants = listParticipants_(config, ev.eventId);
@@ -158,7 +166,9 @@ function handleJoin_(config, ev, userId, displayName) {
     return {
       changed: true,
       feedback: ':white_check_mark: 「' + ev.title + '」に参加登録しました（' +
-        (joinedCount + 1) + '/' + ev.capacity + '名）'
+        (joinedCount + 1) + '/' + ev.capacity + '名）',
+      // この登録で最後の枠が埋まった場合のみ、スレッドで満席を全体へお知らせ
+      fullNotice: joinedCount + 1 === ev.capacity
     };
   }
 
