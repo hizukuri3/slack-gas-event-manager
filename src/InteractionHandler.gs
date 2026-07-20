@@ -1,0 +1,178 @@
+/**
+ * InteractionHandler.gs
+ * Slack Interactivity（告知メッセージのボタン押下）を受け取るWebアプリ。
+ * 参加登録・キャンセル・定員管理・キャンセル待ち繰り上げをリアルタイムに処理する。
+ *
+ * 注意: GASのWebアプリはHTTPヘッダーを参照できないため、署名検証
+ * （X-Slack-Signature + SLACK_SIGNING_SECRET のHMAC検証）は実装できない。
+ * 代替として、ペイロードに含まれる token を SLACK_VERIFICATION_TOKEN と照合する。
+ */
+
+function doPost(e) {
+  // Interactivity は application/x-www-form-urlencoded の payload= で届く
+  if (e && e.parameter && e.parameter.payload) {
+    try {
+      handleInteraction_(JSON.parse(e.parameter.payload));
+    } catch (err) {
+      console.error('ボタン処理でエラー: ' + err);
+    }
+    return ContentService.createTextOutput('');
+  }
+  // スラッシュコマンド（/event）は command= を含むフォームPOSTで届く
+  if (e && e.parameter && e.parameter.command) {
+    try {
+      return handleSlashCommand_(e.parameter);
+    } catch (err) {
+      console.error('スラッシュコマンド処理でエラー: ' + err);
+      return slashResponse_(':warning: エラーが発生しました。時間をおいて再度お試しください。');
+    }
+  }
+  return ContentService.createTextOutput('');
+}
+
+/** ボタン押下（block_actions）のメイン処理 */
+function handleInteraction_(payload) {
+  if (payload.type !== 'block_actions') return;
+
+  const config = getConfig_();
+
+  // 簡易検証：Verification Token の照合（設定されている場合のみ）
+  if (config.slackVerificationToken && payload.token !== config.slackVerificationToken) {
+    return;
+  }
+
+  const action = (payload.actions && payload.actions[0]) || null;
+  if (!action) return;
+  if (action.action_id !== ACTION_JOIN && action.action_id !== ACTION_LEAVE) return;
+
+  const userId = payload.user.id;
+  const responseUrl = payload.response_url;
+
+  // ボタンの value に埋めた イベントID で特定（旧メッセージ向けに ts でもフォールバック）
+  let ev = action.value ? findEventById_(config, action.value) : null;
+  if (!ev && payload.channel && payload.message) {
+    ev = findEventByMessage_(config, payload.channel.id, payload.message.ts);
+  }
+  if (!ev) {
+    respondEphemeral_(responseUrl, ':warning: 対象のイベントが見つかりませんでした。');
+    return;
+  }
+
+  // 中止済みイベントは処理しない
+  if (isCancelledStatus_(ev.status)) {
+    respondEphemeral_(responseUrl, ':no_entry: このイベントは中止になったため、操作できません。');
+    return;
+  }
+
+  // ガードレール：イベント終了後は一切の処理をスキップ
+  if (ev.end.getTime() < Date.now()) {
+    respondEphemeral_(responseUrl, ':hourglass: このイベントはすでに終了しています。');
+    return;
+  }
+
+  // 同時押下の競合を防ぐロック
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const changed = (action.action_id === ACTION_JOIN)
+      ? handleJoin_(config, ev, userId, responseUrl)
+      : handleLeave_(config, ev, userId, responseUrl);
+    // 状態が変わったときだけ告知メッセージを最新の参加状況で再描画
+    if (changed) refreshAnnouncement_(config, ev);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** 「参加する」ボタン：定員内なら参加、満員ならキャンセル待ちとして受付 */
+function handleJoin_(config, ev, userId, responseUrl) {
+  const participants = listParticipants_(config, ev.eventId);
+  const mine = participants.find(function (p) { return p.userId === userId; });
+  if (mine) {
+    respondEphemeral_(
+      responseUrl,
+      mine.status === PSTATUS.JOINED
+        ? ':information_source: すでに参加登録済みです。'
+        : ':information_source: すでにキャンセル待ちに登録済みです。空きが出たら自動で繰り上げてDMでお知らせします。'
+    );
+    return false;
+  }
+
+  const joinedCount = countByStatus_(participants, PSTATUS.JOINED);
+  const displayName = getDisplayName_(config, userId);
+
+  if (joinedCount < ev.capacity) {
+    appendParticipant_(config, ev.eventId, userId, displayName, PSTATUS.JOINED);
+    respondEphemeral_(
+      responseUrl,
+      ':white_check_mark: 「' + ev.title + '」に参加登録しました（' +
+      (joinedCount + 1) + '/' + ev.capacity + '名）'
+    );
+  } else {
+    const position = countByStatus_(participants, PSTATUS.WAITLIST) + 1;
+    appendParticipant_(config, ev.eventId, userId, displayName, PSTATUS.WAITLIST);
+    respondEphemeral_(
+      responseUrl,
+      ':hourglass_flowing_sand: 満員のため、キャンセル待ち *' + position + '番目* で受け付けました。\n' +
+      '空きが出たら先着順で自動繰り上げし、DMでお知らせします。'
+    );
+  }
+  return true;
+}
+
+/**
+ * 参加者数が定員に達するまでキャンセル待ちを先着順で繰り上げ、本人へDMする。
+ * 定員増枠時（フォーム編集）に使用。
+ */
+function promoteWaitlistedUpToCapacity_(config, ev) {
+  while (true) {
+    const participants = listParticipants_(config, ev.eventId);
+    if (countByStatus_(participants, PSTATUS.JOINED) >= ev.capacity) break;
+    const promoted = promoteFirstWaitlisted_(config, ev.eventId);
+    if (!promoted) break;
+    sendDirectMessage_(
+      config, promoted.userId,
+      ':tada: 「' + ev.title + '」の定員が増えたため、キャンセル待ちから繰り上がりで参加が確定しました！\n' +
+      Utilities.formatDate(ev.start, 'Asia/Tokyo', 'yyyy/MM/dd(EEE) HH:mm') + ' 開始です。'
+    );
+  }
+}
+
+/** 「取り消す」ボタン：登録解除。参加者が抜けた場合はキャンセル待ちを自動繰り上げ */
+function handleLeave_(config, ev, userId, responseUrl) {
+  const before = listParticipants_(config, ev.eventId);
+  const mine = before.find(function (p) { return p.userId === userId; });
+  if (!mine) {
+    respondEphemeral_(responseUrl, ':information_source: 参加登録が見つかりませんでした。');
+    return false;
+  }
+
+  removeParticipant_(config, ev.eventId, userId);
+  respondEphemeral_(responseUrl, ':wave: 「' + ev.title + '」の登録を取り消しました。');
+
+  // キャンセル待ちだった人が抜けただけなら枠は動かない
+  if (mine.status !== PSTATUS.JOINED) return true;
+
+  const joinedAfter = countByStatus_(before, PSTATUS.JOINED) - 1;
+  // 定員減少後などで参加者数がまだ定員以上の場合は繰り上げ・通知を行わない
+  if (joinedAfter >= ev.capacity) return true;
+
+  const promoted = promoteFirstWaitlisted_(config, ev.eventId);
+  if (promoted) {
+    // 公平な先着順（FIFO）で自動繰り上げ → 本人へDM
+    sendDirectMessage_(
+      config, promoted.userId,
+      ':tada: 「' + ev.title + '」に空きが出たため、キャンセル待ちから繰り上がりで参加が確定しました！\n' +
+      Utilities.formatDate(ev.start, 'Asia/Tokyo', 'yyyy/MM/dd(EEE) HH:mm') + ' 開始です。'
+    );
+  } else if (joinedAfter === ev.capacity - 1) {
+    // 満員→空き発生かつ待ちがいない場合のみ、スレッドで全体へお知らせ
+    postMessage_(
+      config, ev.slackChannel,
+      ':bell: 空き枠が出ました（残り' + (ev.capacity - joinedAfter) + '枠）。' +
+      '参加希望の方は「✋ 参加する」ボタンからどうぞ！',
+      ev.slackTs
+    );
+  }
+  return true;
+}

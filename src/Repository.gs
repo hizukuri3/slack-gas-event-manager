@@ -1,0 +1,244 @@
+/**
+ * Repository.gs
+ * スプレッドシート（管理用①・公開用②）への読み書きを担当する。
+ * 書き込み系は必ず管理用・公開用の両方へ同じ内容を反映する（②は①のミラー）。
+ */
+
+/** 管理用・公開用の両スプレッドシートを開いて返す */
+function openSpreadsheets_(config) {
+  return [
+    SpreadsheetApp.openById(config.managementSpreadsheetId),
+    SpreadsheetApp.openById(config.publicSpreadsheetId)
+  ];
+}
+
+/** シートを取得。無ければヘッダー付きで作成する */
+function getOrCreateSheet_(spreadsheet, name, header) {
+  let sheet = spreadsheet.getSheetByName(name);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(name);
+    sheet.getRange(1, 1, 1, header.length).setValues([header]);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+/** 初回セットアップ：両スプレッドシートに2シートを作成する（手動実行用） */
+function initializeSheets() {
+  const config = getConfig_();
+  openSpreadsheets_(config).forEach(function (ss) {
+    getOrCreateSheet_(ss, SHEET_EVENT_MASTER, EVENT_MASTER_HEADER);
+    getOrCreateSheet_(ss, SHEET_PARTICIPANTS, PARTICIPANTS_HEADER);
+  });
+}
+
+// ==================== イベントマスター ====================
+
+/** イベントオブジェクト → シート1行の配列に変換 */
+function eventToRow_(ev) {
+  const row = new Array(EVENT_MASTER_HEADER.length).fill('');
+  row[COL.EVENT_ID] = ev.eventId;
+  row[COL.RESPONSE_ID] = ev.responseId;
+  row[COL.TITLE] = ev.title;
+  row[COL.ORGANIZER] = ev.organizer;
+  row[COL.START] = ev.start;
+  row[COL.END] = ev.end;
+  row[COL.CAPACITY] = ev.capacity;
+  row[COL.STATUS] = ev.status;
+  row[COL.FORMAT] = ev.format;
+  row[COL.LOCATION] = ev.location;
+  row[COL.DESCRIPTION] = ev.description;
+  row[COL.PREPARATION] = ev.preparation;
+  row[COL.CALENDAR_EVENT_ID] = ev.calendarEventId;
+  row[COL.SLACK_CHANNEL] = ev.slackChannel;
+  row[COL.SLACK_TS] = ev.slackTs;
+  row[COL.EDIT_URL] = ev.editUrl;
+  row[COL.CREATED_AT] = ev.createdAt;
+  row[COL.UPDATED_AT] = ev.updatedAt;
+  row[COL.TYPE] = ev.type || EVENT_TYPE.DISCIPLE;
+  return row;
+}
+
+/** シート1行の配列 → イベントオブジェクトに変換 */
+function rowToEvent_(row) {
+  return {
+    eventId: row[COL.EVENT_ID],
+    responseId: row[COL.RESPONSE_ID],
+    title: row[COL.TITLE],
+    organizer: row[COL.ORGANIZER],
+    start: new Date(row[COL.START]),
+    end: new Date(row[COL.END]),
+    capacity: Number(row[COL.CAPACITY]),
+    status: row[COL.STATUS],
+    format: row[COL.FORMAT],
+    location: row[COL.LOCATION],
+    description: row[COL.DESCRIPTION],
+    preparation: row[COL.PREPARATION],
+    calendarEventId: row[COL.CALENDAR_EVENT_ID],
+    slackChannel: String(row[COL.SLACK_CHANNEL]),
+    slackTs: String(row[COL.SLACK_TS]),
+    editUrl: row[COL.EDIT_URL],
+    createdAt: row[COL.CREATED_AT],
+    updatedAt: row[COL.UPDATED_AT],
+    type: row[COL.TYPE] || EVENT_TYPE.DISCIPLE
+  };
+}
+
+/**
+ * 「師匠イベント」かどうか。
+ * 判定は種別列（=どちらのフォームから登録されたか）のみで一意に決まる。
+ */
+function isMasterEvent_(ev) {
+  return ev.type === EVENT_TYPE.MASTER;
+}
+
+/**
+ * 公開用スプレッドシートへ書き込む行を返す。
+ * 弟子イベントは性善説運用として編集用URLも含めて全列ミラーする
+ * （主催者がDMを紛失しても公開シートから自力で参照できるようにする意図的な設計）。
+ * 師匠イベントだけは、弟子に編集されないよう回答編集用URLを空欄にする。
+ */
+function rowForPublic_(config, ev, row) {
+  if (!isMasterEvent_(ev)) return row;
+  const masked = row.slice();
+  masked[COL.EDIT_URL] = '';
+  return masked;
+}
+
+/** イベントを管理用・公開用の両方へ新規追記する */
+function insertEvent_(config, ev) {
+  const row = eventToRow_(ev);
+  openSpreadsheets_(config).forEach(function (ss, index) {
+    const sheet = getOrCreateSheet_(ss, SHEET_EVENT_MASTER, EVENT_MASTER_HEADER);
+    sheet.appendRow(index === 0 ? row : rowForPublic_(config, ev, row));
+  });
+}
+
+/** イベントIDをキーに両スプレッドシートの行を上書き更新する */
+function updateEvent_(config, ev) {
+  const row = eventToRow_(ev);
+  openSpreadsheets_(config).forEach(function (ss, index) {
+    const sheet = getOrCreateSheet_(ss, SHEET_EVENT_MASTER, EVENT_MASTER_HEADER);
+    const values = sheet.getDataRange().getValues();
+    for (let i = 1; i < values.length; i++) {
+      if (values[i][COL.EVENT_ID] === ev.eventId) {
+        sheet.getRange(i + 1, 1, 1, EVENT_MASTER_HEADER.length)
+          .setValues([index === 0 ? row : rowForPublic_(config, ev, row)]);
+        break;
+      }
+    }
+  });
+}
+
+/** 条件に一致する最初のイベントを管理用シートから探す */
+function findEvent_(config, predicate) {
+  const ss = SpreadsheetApp.openById(config.managementSpreadsheetId);
+  const sheet = ss.getSheetByName(SHEET_EVENT_MASTER);
+  if (!sheet) return null;
+  const values = sheet.getDataRange().getValues();
+  for (let i = 1; i < values.length; i++) {
+    const ev = rowToEvent_(values[i]);
+    if (predicate(ev)) return ev;
+  }
+  return null;
+}
+
+/** フォーム回答IDでイベントを検索（回答編集の照合に使用） */
+function findEventByResponseId_(config, responseId) {
+  return findEvent_(config, function (ev) { return ev.responseId === responseId; });
+}
+
+/** Slackのチャンネル+メッセージtsでイベントを検索（リアクション処理に使用） */
+function findEventByMessage_(config, channel, ts) {
+  return findEvent_(config, function (ev) {
+    return ev.slackChannel === channel && ev.slackTs === ts;
+  });
+}
+
+/** イベントIDでイベントを検索（Webアプリ表示に使用） */
+function findEventById_(config, eventId) {
+  return findEvent_(config, function (ev) { return ev.eventId === eventId; });
+}
+
+// ==================== 参加者リスト ====================
+
+/** 参加者（またはキャンセル待ち）を両スプレッドシートへ1行追記する */
+function appendParticipant_(config, eventId, userId, displayName, status) {
+  const now = new Date();
+  openSpreadsheets_(config).forEach(function (ss) {
+    const sheet = getOrCreateSheet_(ss, SHEET_PARTICIPANTS, PARTICIPANTS_HEADER);
+    sheet.appendRow([eventId, userId, displayName, status, now]);
+  });
+}
+
+/**
+ * 両スプレッドシートから該当参加者の行を検索して1行削除する。
+ * @return {boolean} 管理用シートで削除が発生したか
+ */
+function removeParticipant_(config, eventId, userId) {
+  let removed = false;
+  openSpreadsheets_(config).forEach(function (ss, index) {
+    const sheet = ss.getSheetByName(SHEET_PARTICIPANTS);
+    if (!sheet) return;
+    const values = sheet.getDataRange().getValues();
+    for (let i = values.length - 1; i >= 1; i--) {
+      if (values[i][0] === eventId && values[i][1] === userId) {
+        sheet.deleteRow(i + 1);
+        if (index === 0) removed = true;
+        break;
+      }
+    }
+  });
+  return removed;
+}
+
+/** 対象イベントの参加者・キャンセル待ち（登録順）を返す */
+function listParticipants_(config, eventId) {
+  const ss = SpreadsheetApp.openById(config.managementSpreadsheetId);
+  const sheet = ss.getSheetByName(SHEET_PARTICIPANTS);
+  if (!sheet) return [];
+  const values = sheet.getDataRange().getValues();
+  const result = [];
+  for (let i = 1; i < values.length; i++) {
+    if (values[i][0] === eventId) {
+      result.push({
+        userId: values[i][1],
+        displayName: values[i][2],
+        status: values[i][3],
+        registeredAt: values[i][4]
+      });
+    }
+  }
+  return result;
+}
+
+/** 状態でフィルタした人数を数える */
+function countByStatus_(participants, status) {
+  return participants.filter(function (p) { return p.status === status; }).length;
+}
+
+/**
+ * キャンセル待ちの先頭（登録が最も早い人）を「参加」へ繰り上げる。
+ * @return {?Object} 繰り上げた参加者。待ちがいなければ null
+ */
+function promoteFirstWaitlisted_(config, eventId) {
+  const first = listParticipants_(config, eventId).find(function (p) {
+    return p.status === PSTATUS.WAITLIST;
+  });
+  if (!first) return null;
+
+  const statusColumn = PARTICIPANTS_HEADER.indexOf('状態') + 1;
+  openSpreadsheets_(config).forEach(function (ss) {
+    const sheet = ss.getSheetByName(SHEET_PARTICIPANTS);
+    if (!sheet) return;
+    const values = sheet.getDataRange().getValues();
+    for (let i = 1; i < values.length; i++) {
+      if (values[i][0] === eventId && values[i][1] === first.userId) {
+        sheet.getRange(i + 1, statusColumn).setValue(PSTATUS.JOINED);
+        break;
+      }
+    }
+  });
+  first.status = PSTATUS.JOINED;
+  return first;
+}

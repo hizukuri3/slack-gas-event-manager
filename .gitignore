@@ -1,0 +1,10 @@
+# clasp（GASプロジェクトIDを含むためコミットしない）
+.clasp.json
+.clasprc.json
+
+# 秘匿情報・ローカル設定
+*.env
+.env*
+
+# OS
+.DS_Store
