@@ -66,11 +66,32 @@ function onFormSubmit(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const answers = extractAnswers_(formResponse);
+    // 1. 回答の取り出し（日時の解釈に失敗したら主催者へDMで通知して終了）
+    let answers;
+    try {
+      answers = extractAnswers_(formResponse);
+    } catch (err) {
+      notifyFormError_(config, formResponse, ['日時を解釈できませんでした: ' + err.message]);
+      return;
+    }
+
+    // 2. 入力検証（不備があれば登録・更新せず、修正用リンク付きでDM通知）
     const existing = findEventByResponseId_(config, responseId);
+    const errors = validateAnswers_(answers, existing);
+    if (errors.length > 0) {
+      notifyFormError_(config, formResponse, errors);
+      return;
+    }
+
     if (existing) {
       handleEventEdit_(config, existing, answers);
     } else {
+      // 3. 二重登録ガード（「編集のつもりで新規送信」対策）
+      const duplicate = findDuplicateEvent_(config, answers);
+      if (duplicate) {
+        notifyDuplicateEvent_(config, answers, duplicate);
+        return;
+      }
       handleNewEvent_(config, formResponse, answers, isMaster);
     }
   } finally {
@@ -121,6 +142,98 @@ function combineEndTime_(start, value) {
 /** 「@名前」「<@U123>」等の揺れを補正してSlackユーザーIDだけを取り出す */
 function normalizeSlackUserId_(value) {
   return String(value || '').trim().replace(/^<@/, '').replace(/>$/, '').replace(/^@/, '');
+}
+
+/** SlackユーザーIDとして妥当な形式かどうか（U/W始まりの英数字） */
+function isValidSlackUserId_(id) {
+  return /^[UW][A-Z0-9]{4,}$/.test(String(id || ''));
+}
+
+// ==================== 入力検証・二重登録ガード ====================
+
+/**
+ * フォーム回答を検証してエラー文言の配列を返す（空配列なら問題なし）。
+ * @param {Object} answers 回答
+ * @param {?Object} existing 編集の場合は既存イベント、新規なら null
+ */
+function validateAnswers_(answers, existing) {
+  const errors = [];
+  if (!answers.title) {
+    errors.push('イベント名を入力してください。');
+  }
+  if (!isValidSlackUserId_(answers.organizer)) {
+    errors.push('主催者のSlackユーザーIDの形式が不正です（例: U0123ABCD）。' +
+      'Slackで `/event` を実行すると、IDが自動入力されたフォームが届きます。');
+  }
+  // 開始日時の過去チェック（編集で開始日時を変えていない場合は開催後の修正を許容）
+  const startChanged = !existing || existing.start.getTime() !== answers.start.getTime();
+  if (startChanged && answers.start.getTime() < Date.now()) {
+    errors.push('開始日時が過去になっています。日付・時刻を確認してください。');
+  }
+  if (!Number.isInteger(answers.capacity) || answers.capacity < 1) {
+    errors.push('定員は1以上の整数で入力してください。');
+  }
+  if (!isAutoMeet_(answers.format) && !answers.location) {
+    errors.push('開催形式が「②オンライン・手動URL」「③オフライン・対面」の場合、' +
+      '「会場URL または 開催場所」の入力は必須です。');
+  }
+  return errors;
+}
+
+/** 入力不備を主催者へDMで通知する（IDが不正でDMできない場合は告知チャンネルへ案内） */
+function notifyFormError_(config, formResponse, errors) {
+  let organizer = '';
+  try {
+    formResponse.getItemResponses().forEach(function (itemResponse) {
+      if (itemResponse.getItem().getTitle() === FORM_TITLES.ORGANIZER) {
+        organizer = normalizeSlackUserId_(itemResponse.getResponse());
+      }
+    });
+  } catch (err) {
+    console.warn('主催者IDの取り出しに失敗: ' + err);
+  }
+
+  if (isValidSlackUserId_(organizer)) {
+    sendDirectMessage_(
+      config, organizer,
+      ':warning: *イベントの登録・更新を受け付けられませんでした*\n' +
+      errors.map(function (msg) { return '• ' + msg; }).join('\n') + '\n\n' +
+      '以下のURLから修正して再送信してください:\n' + formResponse.getEditResponseUrl()
+    );
+  } else {
+    // DMの宛先が分からないため、告知チャンネルで心当たりのある人へ案内
+    postMessage_(
+      config, config.slackChannelId,
+      ':warning: フォームからのイベント登録を受け付けられませんでした' +
+      '（主催者のSlackユーザーIDが不正なため、通知をお送りできません）。\n' +
+      '心当たりのある方は、Slackで `/event` を実行して届くフォームから再登録してください。'
+    );
+  }
+}
+
+/**
+ * 「編集のつもりで新規送信」による二重登録を検知する。
+ * 同じ主催者が、同じ開始日時で開催中ステータスのイベントを既に持っていれば重複とみなす
+ * （同じイベント名でも開始日時が異なれば連続講座として正常に登録できる）。
+ */
+function findDuplicateEvent_(config, answers) {
+  return findEvent_(config, function (ev) {
+    return ev.organizer === answers.organizer &&
+      !isCancelledStatus_(ev.status) &&
+      ev.start.getTime() === answers.start.getTime();
+  });
+}
+
+/** 二重登録を検知した旨を主催者へDMで通知する（今回の送信は登録しない） */
+function notifyDuplicateEvent_(config, answers, duplicate) {
+  sendDirectMessage_(
+    config, answers.organizer,
+    ':warning: *二重登録の可能性があるため、今回の送信は登録していません*\n' +
+    '同じ開始日時のイベント「' + duplicate.title + '」がすでに登録されています。\n\n' +
+    '• 既存イベントの内容を変更したい場合 → こちらの編集用URLから修正してください:\n' +
+    duplicate.editUrl + '\n' +
+    '• 別イベントとして開催したい場合 → 開始日時を変えて、もう一度フォームを送信してください。'
+  );
 }
 
 /** ステータス文字列が「中止」かどうか */
