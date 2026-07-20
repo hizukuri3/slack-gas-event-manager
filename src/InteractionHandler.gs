@@ -70,54 +70,89 @@ function handleInteraction_(payload) {
     return;
   }
 
-  // 同時押下の競合を防ぐロック
+  // 表示名の取得（外部API呼び出し）はロックの外で済ませておく
+  const displayName = (action.action_id === ACTION_JOIN)
+    ? getDisplayName_(config, userId)
+    : null;
+
+  // 同時押下の競合を防ぐロック。取得できなければ本人にリトライを案内
   const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
   try {
-    const changed = (action.action_id === ACTION_JOIN)
-      ? handleJoin_(config, ev, userId, responseUrl)
-      : handleLeave_(config, ev, userId, responseUrl);
-    // 状態が変わったときだけ告知メッセージを最新の参加状況で再描画
-    if (changed) refreshAnnouncement_(config, ev);
+    lock.waitLock(30000);
+  } catch (err) {
+    respondEphemeral_(
+      responseUrl,
+      ':hourglass: ただいま操作が混み合っています。数秒おいて、もう一度ボタンを押してください。'
+    );
+    return;
+  }
+
+  // ---- ロック内：シートの読み書きと判定のみ（通知・再描画はロック外へ）----
+  let result;
+  try {
+    result = (action.action_id === ACTION_JOIN)
+      ? handleJoin_(config, ev, userId, displayName)
+      : handleLeave_(config, ev, userId);
   } finally {
     lock.releaseLock();
   }
+
+  // ---- ロック外：本人への応答・告知の再描画・各種通知 ----
+  respondEphemeral_(responseUrl, result.feedback);
+  if (result.changed) {
+    refreshAnnouncement_(config, ev);
+  }
+  if (result.promoted) {
+    sendDirectMessage_(
+      config, result.promoted.userId,
+      ':tada: 「' + ev.title + '」に空きが出たため、キャンセル待ちから繰り上がりで参加が確定しました！\n' +
+      Utilities.formatDate(ev.start, 'Asia/Tokyo', 'yyyy/MM/dd(EEE) HH:mm') + ' 開始です。'
+    );
+  }
+  if (result.remainingNotice) {
+    postMessage_(
+      config, ev.slackChannel,
+      ':bell: 空き枠が出ました（残り' + result.remainingNotice + '枠）。' +
+      '参加希望の方は「✋ 参加する」ボタンからどうぞ！',
+      ev.slackTs
+    );
+  }
 }
 
-/** 「参加する」ボタン：定員内なら参加、満員ならキャンセル待ちとして受付 */
-function handleJoin_(config, ev, userId, responseUrl) {
+/**
+ * 「参加する」ボタン：定員内なら参加、満員ならキャンセル待ちとして受付。
+ * ロック内で呼ばれるため、シート操作と判定のみを行い、通知内容は結果として返す。
+ * @return {{changed: boolean, feedback: string}}
+ */
+function handleJoin_(config, ev, userId, displayName) {
   const participants = listParticipants_(config, ev.eventId);
   const mine = participants.find(function (p) { return p.userId === userId; });
   if (mine) {
-    respondEphemeral_(
-      responseUrl,
-      mine.status === PSTATUS.JOINED
+    return {
+      changed: false,
+      feedback: mine.status === PSTATUS.JOINED
         ? ':information_source: すでに参加登録済みです。'
         : ':information_source: すでにキャンセル待ちに登録済みです。空きが出たら自動で繰り上げてDMでお知らせします。'
-    );
-    return false;
+    };
   }
 
   const joinedCount = countByStatus_(participants, PSTATUS.JOINED);
-  const displayName = getDisplayName_(config, userId);
-
   if (joinedCount < ev.capacity) {
     appendParticipant_(config, ev.eventId, userId, displayName, PSTATUS.JOINED);
-    respondEphemeral_(
-      responseUrl,
-      ':white_check_mark: 「' + ev.title + '」に参加登録しました（' +
-      (joinedCount + 1) + '/' + ev.capacity + '名）'
-    );
-  } else {
-    const position = countByStatus_(participants, PSTATUS.WAITLIST) + 1;
-    appendParticipant_(config, ev.eventId, userId, displayName, PSTATUS.WAITLIST);
-    respondEphemeral_(
-      responseUrl,
-      ':hourglass_flowing_sand: 満員のため、キャンセル待ち *' + position + '番目* で受け付けました。\n' +
-      '空きが出たら先着順で自動繰り上げし、DMでお知らせします。'
-    );
+    return {
+      changed: true,
+      feedback: ':white_check_mark: 「' + ev.title + '」に参加登録しました（' +
+        (joinedCount + 1) + '/' + ev.capacity + '名）'
+    };
   }
-  return true;
+
+  const position = countByStatus_(participants, PSTATUS.WAITLIST) + 1;
+  appendParticipant_(config, ev.eventId, userId, displayName, PSTATUS.WAITLIST);
+  return {
+    changed: true,
+    feedback: ':hourglass_flowing_sand: 満員のため、キャンセル待ち *' + position + '番目* で受け付けました。\n' +
+      '空きが出たら先着順で自動繰り上げし、DMでお知らせします。'
+  };
 }
 
 /**
@@ -138,41 +173,37 @@ function promoteWaitlistedUpToCapacity_(config, ev) {
   }
 }
 
-/** 「取り消す」ボタン：登録解除。参加者が抜けた場合はキャンセル待ちを自動繰り上げ */
-function handleLeave_(config, ev, userId, responseUrl) {
+/**
+ * 「取り消す」ボタン：登録解除。参加者が抜けた場合はキャンセル待ちを自動繰り上げ。
+ * ロック内で呼ばれるため、シート操作と判定のみを行い、通知内容は結果として返す。
+ * @return {{changed: boolean, feedback: string, promoted: ?Object, remainingNotice: ?number}}
+ */
+function handleLeave_(config, ev, userId) {
+  const result = { changed: false, feedback: '', promoted: null, remainingNotice: null };
+
   const before = listParticipants_(config, ev.eventId);
   const mine = before.find(function (p) { return p.userId === userId; });
   if (!mine) {
-    respondEphemeral_(responseUrl, ':information_source: 参加登録が見つかりませんでした。');
-    return false;
+    result.feedback = ':information_source: 参加登録が見つかりませんでした。';
+    return result;
   }
 
   removeParticipant_(config, ev.eventId, userId);
-  respondEphemeral_(responseUrl, ':wave: 「' + ev.title + '」の登録を取り消しました。');
+  result.changed = true;
+  result.feedback = ':wave: 「' + ev.title + '」の登録を取り消しました。';
 
   // キャンセル待ちだった人が抜けただけなら枠は動かない
-  if (mine.status !== PSTATUS.JOINED) return true;
+  if (mine.status !== PSTATUS.JOINED) return result;
 
   const joinedAfter = countByStatus_(before, PSTATUS.JOINED) - 1;
   // 定員減少後などで参加者数がまだ定員以上の場合は繰り上げ・通知を行わない
-  if (joinedAfter >= ev.capacity) return true;
+  if (joinedAfter >= ev.capacity) return result;
 
-  const promoted = promoteFirstWaitlisted_(config, ev.eventId);
-  if (promoted) {
-    // 公平な先着順（FIFO）で自動繰り上げ → 本人へDM
-    sendDirectMessage_(
-      config, promoted.userId,
-      ':tada: 「' + ev.title + '」に空きが出たため、キャンセル待ちから繰り上がりで参加が確定しました！\n' +
-      Utilities.formatDate(ev.start, 'Asia/Tokyo', 'yyyy/MM/dd(EEE) HH:mm') + ' 開始です。'
-    );
-  } else if (joinedAfter === ev.capacity - 1) {
+  // 公平な先着順（FIFO）で自動繰り上げ（DM送信はロック外で行う）
+  result.promoted = promoteFirstWaitlisted_(config, ev.eventId);
+  if (!result.promoted && joinedAfter === ev.capacity - 1) {
     // 満員→空き発生かつ待ちがいない場合のみ、スレッドで全体へお知らせ
-    postMessage_(
-      config, ev.slackChannel,
-      ':bell: 空き枠が出ました（残り' + (ev.capacity - joinedAfter) + '枠）。' +
-      '参加希望の方は「✋ 参加する」ボタンからどうぞ！',
-      ev.slackTs
-    );
+    result.remainingNotice = ev.capacity - joinedAfter;
   }
-  return true;
+  return result;
 }

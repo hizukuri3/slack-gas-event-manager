@@ -4,15 +4,21 @@
  * setupTriggers() を1度手動実行してフォーム送信トリガーを登録すること。
  */
 
-/** フォーム送信トリガーを登録する（初回セットアップ時に手動実行） */
+/** フォーム送信・定期同期トリガーを登録する（初回セットアップ時に手動実行） */
 function setupTriggers() {
   const config = getConfig_();
   // 二重登録を防ぐため既存の同名トリガーを削除
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (trigger.getHandlerFunction() === 'onFormSubmit') {
+    const handler = trigger.getHandlerFunction();
+    if (handler === 'onFormSubmit' || handler === 'syncPublicSheets') {
       ScriptApp.deleteTrigger(trigger);
     }
   });
+  // 公開用シートへの参加者リスト定期同期（5分毎）
+  ScriptApp.newTrigger('syncPublicSheets')
+    .timeBased()
+    .everyMinutes(5)
+    .create();
   // 弟子用・師匠用（設定されていれば）の両フォームにトリガーを登録
   const formIds = [config.formId];
   if (config.masterFormId && config.masterFormId !== config.formId) {

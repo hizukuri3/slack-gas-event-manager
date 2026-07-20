@@ -161,35 +161,39 @@ function findEventById_(config, eventId) {
 }
 
 // ==================== 参加者リスト ====================
+// 参加者リストの書き込みは管理用スプレッドシートのみに行う（ボタン応答の高速化のため）。
+// 公開用へは syncPublicSheets（5分毎の時間トリガー）が丸ごと同期する。
 
-/** 参加者（またはキャンセル待ち）を両スプレッドシートへ1行追記する */
+/** 公開用シートの同期が必要であることを記録する */
+function markPublicSyncDirty_() {
+  PropertiesService.getScriptProperties().setProperty('PUBLIC_SYNC_DIRTY', '1');
+}
+
+/** 参加者（またはキャンセル待ち）を管理用シートへ1行追記する */
 function appendParticipant_(config, eventId, userId, displayName, status) {
-  const now = new Date();
-  openSpreadsheets_(config).forEach(function (ss) {
-    const sheet = getOrCreateSheet_(ss, SHEET_PARTICIPANTS, PARTICIPANTS_HEADER);
-    sheet.appendRow([eventId, userId, displayName, status, now]);
-  });
+  const ss = SpreadsheetApp.openById(config.managementSpreadsheetId);
+  const sheet = getOrCreateSheet_(ss, SHEET_PARTICIPANTS, PARTICIPANTS_HEADER);
+  sheet.appendRow([eventId, userId, displayName, status, new Date()]);
+  markPublicSyncDirty_();
 }
 
 /**
- * 両スプレッドシートから該当参加者の行を検索して1行削除する。
- * @return {boolean} 管理用シートで削除が発生したか
+ * 管理用シートから該当参加者の行を検索して1行削除する。
+ * @return {boolean} 削除が発生したか
  */
 function removeParticipant_(config, eventId, userId) {
-  let removed = false;
-  openSpreadsheets_(config).forEach(function (ss, index) {
-    const sheet = ss.getSheetByName(SHEET_PARTICIPANTS);
-    if (!sheet) return;
-    const values = sheet.getDataRange().getValues();
-    for (let i = values.length - 1; i >= 1; i--) {
-      if (values[i][0] === eventId && values[i][1] === userId) {
-        sheet.deleteRow(i + 1);
-        if (index === 0) removed = true;
-        break;
-      }
+  const ss = SpreadsheetApp.openById(config.managementSpreadsheetId);
+  const sheet = ss.getSheetByName(SHEET_PARTICIPANTS);
+  if (!sheet) return false;
+  const values = sheet.getDataRange().getValues();
+  for (let i = values.length - 1; i >= 1; i--) {
+    if (values[i][0] === eventId && values[i][1] === userId) {
+      sheet.deleteRow(i + 1);
+      markPublicSyncDirty_();
+      return true;
     }
-  });
-  return removed;
+  }
+  return false;
 }
 
 /** 対象イベントの参加者・キャンセル待ち（登録順）を返す */
@@ -228,17 +232,43 @@ function promoteFirstWaitlisted_(config, eventId) {
   if (!first) return null;
 
   const statusColumn = PARTICIPANTS_HEADER.indexOf('状態') + 1;
-  openSpreadsheets_(config).forEach(function (ss) {
-    const sheet = ss.getSheetByName(SHEET_PARTICIPANTS);
-    if (!sheet) return;
-    const values = sheet.getDataRange().getValues();
-    for (let i = 1; i < values.length; i++) {
-      if (values[i][0] === eventId && values[i][1] === first.userId) {
-        sheet.getRange(i + 1, statusColumn).setValue(PSTATUS.JOINED);
-        break;
-      }
+  const sheet = SpreadsheetApp.openById(config.managementSpreadsheetId)
+    .getSheetByName(SHEET_PARTICIPANTS);
+  const values = sheet.getDataRange().getValues();
+  for (let i = 1; i < values.length; i++) {
+    if (values[i][0] === eventId && values[i][1] === first.userId) {
+      sheet.getRange(i + 1, statusColumn).setValue(PSTATUS.JOINED);
+      break;
     }
-  });
+  }
+  markPublicSyncDirty_();
   first.status = PSTATUS.JOINED;
   return first;
+}
+
+// ==================== 公開用シートへの定期同期 ====================
+
+/**
+ * 参加者リストを管理用→公開用へ丸ごと同期する（5分毎の時間トリガーで実行）。
+ * 変更フラグが立っていない場合は即終了する。
+ * ヘッダーごと全行を上書きするため、過去に同期が失敗していても次回実行で必ず一致する（自己修復）。
+ */
+function syncPublicSheets() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('PUBLIC_SYNC_DIRTY') !== '1') return;
+  // 先にフラグを消す（同期中に新たな書き込みがあれば再度立ち、次回実行で拾われる）
+  props.deleteProperty('PUBLIC_SYNC_DIRTY');
+
+  const config = getConfig_();
+  const source = SpreadsheetApp.openById(config.managementSpreadsheetId)
+    .getSheetByName(SHEET_PARTICIPANTS);
+  const target = getOrCreateSheet_(
+    SpreadsheetApp.openById(config.publicSpreadsheetId),
+    SHEET_PARTICIPANTS, PARTICIPANTS_HEADER
+  );
+  const values = source
+    ? source.getDataRange().getValues()
+    : [PARTICIPANTS_HEADER];
+  target.clearContents();
+  target.getRange(1, 1, values.length, values[0].length).setValues(values);
 }
