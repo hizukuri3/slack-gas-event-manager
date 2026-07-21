@@ -271,7 +271,6 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
     calendarEventId: '',
     slackChannel: config.slackChannelId,
     slackTs: '',
-    detailTs: '',
     editUrl: formResponse.getEditResponseUrl(),
     createdAt: now,
     updatedAt: now
@@ -284,21 +283,12 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
     ev.location = calendarResult.meetUrl;
   }
 
-  // 2. Slack告知投稿（本文は参加ボタン・日時など重要情報のみのBlock Kitメッセージ）
+  // 2. Slack告知投稿（参加/取り消しボタン付きBlock Kitメッセージ）
   const participantsUrl = buildParticipantsPageUrl_(config, eventId);
   const msg = buildAnnouncementBlocks_(ev, [], participantsUrl);
   const ts = postMessage_(config, config.slackChannelId, msg.text, null, msg.blocks);
   if (ts) {
     ev.slackTs = ts;
-    // 事前準備・持ち物・資料リンクは、本文を長くしないようスレッド返信へ回す。
-    // 中身の有無に関わらず必ず先にスレッドを1件投稿して「場所」を確保しておく。
-    // こうすると後から持ち物を追加してもこの1件を書き換えるだけで済み、
-    // スレッドの投稿順（満席・空き枠通知などとの前後）が絶対にずれない。
-    const detailMsg = buildDetailBlocks_(ev);
-    const detailTs = postMessage_(config, config.slackChannelId, detailMsg.text, ts, detailMsg.blocks);
-    if (detailTs) {
-      ev.detailTs = detailTs;
-    }
   }
 
   // 3. スプレッドシートへ記録（管理用・公開用の両方）
@@ -366,8 +356,6 @@ function handleEventEdit_(config, existing, answers) {
   // 定員増加時：空いた枠の分だけキャンセル待ちを先着順で自動繰り上げ（本人へDM通知）
   promoteWaitlistedUpToCapacity_(config, ev);
   refreshAnnouncement_(config, ev);
-  // 概要・持ち物などが変わり得るため、スレッドの詳細情報も最新化する
-  refreshDetailThread_(config, ev);
   // 定員減少時：既存の参加者リストは維持したまま、以降の新規受付は
   // ボタン処理側の「現在人数 >= 定員」判定で自動的にキャンセル待ちへ回る。
 
