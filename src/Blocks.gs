@@ -20,26 +20,13 @@ function truncateForBlock_(text, limit) {
 }
 
 /**
- * 本文に載せる概要プレビューの文字数上限。
- * 概要は「内容が分かってスレッドを開く気になる」よう本文の上部に必ず載せるが、
- * 長すぎて目が泳がないよう、これを超える分はスレッドの完全版に委ねる。
- */
-const SUMMARY_PREVIEW_LIMIT = 300;
-
-/** 概要プレビュー。上限を超える場合は切り詰めて末尾に「…」を付ける */
-function previewText_(text, limit) {
-  const s = String(text || '');
-  return s.length > limit ? s.substring(0, limit) + '…' : s;
-}
-
-/**
  * スレッドへ詳細を分けて投稿する必要があるか。
- * 概要が本文プレビューに収まりきらない／事前準備がある／Meet補足がある場合に true。
- * どれも無い（短い概要だけ）のイベントは本文1通で完結させ、スレッドを作らない。
+ * 事前準備・持ち物・資料リンクがある／Meet補足がある場合に true。
+ * どちらも無いイベントは本文1通で完結させ、スレッドを作らない。
+ * （概要は省略せず常に本文へ全文載せるため、スレッド作成の条件には含めない）
  */
 function needsDetailThread_(ev) {
-  const descTruncated = String(ev.description || '').length > SUMMARY_PREVIEW_LIMIT;
-  return descTruncated || !!ev.preparation || needsMeetSplit_(ev);
+  return !!ev.preparation || needsMeetSplit_(ev);
 }
 
 /** 開催日時レンジを「yyyy/MM/dd(EEE) HH:mm - HH:mm」形式の文字列に整形する */
@@ -52,9 +39,9 @@ function formatDateRange_(start, end) {
  * 告知メッセージ（本文）の blocks とフォールバック text を組み立てる。
  *
  * 「目が泳ぐ」というフィードバックを受け、本文には参加ボタン・開催日時・
- * 場所・参加状況に加え、内容が伝わる“概要”までを載せる（概要が無いと
- * そもそもスレッドを開こうと思えないため）。事前準備・持ち物・資料リンクや、
- * 長い概要の続きは buildDetailBlocks_ 側でスレッドへ投稿する。
+ * 場所・参加状況に加え、内容が伝わる“概要”を（省略せず全文）載せる。
+ * 概要が無いとそもそもスレッドを開こうと思えないため。
+ * 事前準備・持ち物・資料リンクは buildDetailBlocks_ 側でスレッドへ投稿する。
  *
  * @param {Object} ev イベント
  * @param {Array} participants listParticipants_ の結果
@@ -81,13 +68,13 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
     ':bust_in_silhouette: 主催: <@' + ev.organizer + '>';
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: headerText } });
 
-  // ---- 概要（内容が伝わるよう本文の上部に載せる。長い場合はプレビュー）----
+  // ---- 概要（内容が伝わるよう本文の上部に全文載せる）----
   if (!cancelled) {
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: '*概要・対象者*\n' + escapeSlackText_(previewText_(ev.description, SUMMARY_PREVIEW_LIMIT))
+        text: truncateForBlock_('*概要・対象者*\n' + escapeSlackText_(ev.description), 3000)
       }
     });
   }
@@ -161,7 +148,7 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
   if (!cancelled && needsDetailThread_(ev)) {
     blocks.push({
       type: 'context',
-      elements: [{ type: 'mrkdwn', text: ':thread: 概要の続き・事前準備・持ち物・資料リンクは、このメッセージのスレッドをご覧ください。' }]
+      elements: [{ type: 'mrkdwn', text: ':thread: 事前準備・持ち物・資料リンクは、このメッセージのスレッドをご覧ください。' }]
     });
   }
 
@@ -180,21 +167,12 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
 
 /**
  * スレッドへ投稿する「詳細情報」の blocks とフォールバック text を組み立てる。
- * 本文（buildAnnouncementBlocks_）から切り出した概要・事前準備・Meet補足を載せる。
- * 概要と事前準備は section を分け、それぞれ Block Kit の上限（3000文字）まで使えるようにする。
+ * 概要は本文に全文載せるため、ここには事前準備・持ち物・資料リンクとMeet補足のみを載せる。
  * @param {Object} ev イベント
  * @return {{text: string, blocks: Array}}
  */
 function buildDetailBlocks_(ev) {
   const blocks = [];
-
-  blocks.push({
-    type: 'section',
-    text: {
-      type: 'mrkdwn',
-      text: truncateForBlock_('*概要・対象者*\n' + escapeSlackText_(ev.description), 3000)
-    }
-  });
 
   if (ev.preparation) {
     blocks.push({
@@ -213,6 +191,15 @@ function buildDetailBlocks_(ev) {
         type: 'mrkdwn',
         text: ':bulb: 無料版Meetのため60分ごとに接続が切れます。切れたら同じURLから再入室してください。'
       }]
+    });
+  }
+
+  // 編集で事前準備が消され、Meet補足も無くなった場合の空更新を避けるフォールバック。
+  // （スレッドは chat.update でその場を書き換えるため、順番はずれない）
+  if (blocks.length === 0) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: '現在、事前準備・持ち物・資料リンクの登録はありません。' }
     });
   }
 

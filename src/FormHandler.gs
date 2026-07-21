@@ -290,8 +290,8 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
   const ts = postMessage_(config, config.slackChannelId, msg.text, null, msg.blocks);
   if (ts) {
     ev.slackTs = ts;
-    // 概要の続き・事前準備・持ち物などは、本文を長くしないようスレッド返信へ回す
-    // （短い概要だけで完結するイベントはスレッドを作らない）
+    // 事前準備・持ち物・資料リンクは、本文を長くしないようスレッド返信へ回す
+    // （事前準備もMeet補足も無いイベントはスレッドを作らない）
     if (needsDetailThread_(ev)) {
       const detailMsg = buildDetailBlocks_(ev);
       const detailTs = postMessage_(config, config.slackChannelId, detailMsg.text, ts, detailMsg.blocks);
