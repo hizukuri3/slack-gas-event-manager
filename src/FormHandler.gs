@@ -314,10 +314,16 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
 function handleEventEdit_(config, existing, answers) {
   const now = new Date();
   const ev = existing;
+  // 変更前の日時を控える（時間変更の周知でビフォー/アフターを示すため）
+  const prevStart = existing.start;
+  const prevEnd = existing.end;
+  // 開催時間そのものが変わったか（開催形式の変更は含めない。参加者への時間変更周知の判定に使う）
+  const timeChanged =
+    existing.start.getTime() !== answers.start.getTime() ||
+    existing.end.getTime() !== answers.end.getTime();
   // 日時・開催形式が変わった場合はカレンダー予定の作り直しが必要（分割数が変わり得るため）
   const scheduleChanged =
-    existing.start.getTime() !== answers.start.getTime() ||
-    existing.end.getTime() !== answers.end.getTime() ||
+    timeChanged ||
     existing.format !== answers.format;
   ev.title = answers.title;
   ev.organizer = answers.organizer;
@@ -353,11 +359,58 @@ function handleEventEdit_(config, existing, answers) {
   // 定員減少時：既存の参加者リストは維持したまま、以降の新規受付は
   // ボタン処理側の「現在人数 >= 定員」判定で自動的にキャンセル待ちへ回る。
 
+  // 開催時間が変わった場合は、告知スレッドと参加者DMで能動的に周知する
+  // （Slackはメッセージ編集ではプッシュ通知を出さず、告知の再描画だけでは参加者が気づけないため）
+  if (timeChanged) {
+    notifyScheduleChange_(config, ev, prevStart, prevEnd);
+  }
+
   let dmText = ':pencil2: イベント「' + ev.title + '」の内容を更新しました。';
   if (scheduleChanged && isAutoMeet_(ev.format)) {
     dmText += '\n:bulb: 日時・開催形式の変更に伴い、Meet URLが再発行されています。最新のURLはSlack告知メッセージをご確認ください。';
   }
   sendDirectMessage_(config, ev.organizer, dmText);
+}
+
+/**
+ * 開催時間の変更を、告知スレッドへの投稿と参加者・キャンセル待ちへのDMで周知する。
+ * @param {Object} config 設定
+ * @param {Object} ev 変更後のイベント（ev.start / ev.end は更新済み）
+ * @param {Date} prevStart 変更前の開始日時
+ * @param {Date} prevEnd 変更前の終了日時
+ */
+function notifyScheduleChange_(config, ev, prevStart, prevEnd) {
+  const before = formatDateRange_(prevStart, prevEnd);
+  const after = formatDateRange_(ev.start, ev.end);
+
+  // 1. 告知スレッドへお知らせを投稿（フォロワー全体にプッシュ通知が飛ぶ）
+  if (ev.slackTs) {
+    postMessage_(
+      config, ev.slackChannel,
+      ':alarm_clock: イベント「' + ev.title + '」の開催日時が変更されました。\n' +
+      '• 変更前: ' + before + '\n' +
+      '• 変更後: ' + after + '\n' +
+      '参加登録済みの方へは個別にDMでもお知らせしています。',
+      ev.slackTs
+    );
+  }
+
+  // 2. 参加者・キャンセル待ちの各人へDM（時間変更は双方に影響するため両方へ送る）
+  // DMは告知チャンネルと別の場所に届くため、告知メッセージへのリンクを添えて
+  // どのイベントかをすぐ辿れるようにする（同名の連続講座がある場合の取り違え防止）。
+  const permalink = ev.slackTs ? getPermalink_(config, ev.slackChannel, ev.slackTs) : '';
+  const linkLine = permalink ? '\n▶ 告知を見る: ' + permalink : '';
+  listParticipants_(config, ev.eventId).forEach(function (p) {
+    const suffix = p.status === PSTATUS.WAITLIST ? '（現在キャンセル待ちで登録中です）' : '';
+    sendDirectMessage_(
+      config, p.userId,
+      ':alarm_clock: 参加登録中のイベント「' + ev.title + '」の開催日時が変更されました。' + suffix + '\n' +
+      '• 変更前: ' + before + '\n' +
+      '• 変更後: ' + after + '\n' +
+      'ご都合が合わなくなった場合は、告知メッセージの「取り消す」ボタンからキャンセルできます。' +
+      linkLine
+    );
+  });
 }
 
 /** イベント中止処理：カレンダー削除（分割予定を含む全件）・シート更新・Slack告知へ【中止】追記 */

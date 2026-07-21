@@ -19,6 +19,12 @@ function truncateForBlock_(text, limit) {
   return s.length > limit ? s.substring(0, limit - 1) + '…' : s;
 }
 
+/** 開催日時レンジを「yyyy/MM/dd(EEE) HH:mm - HH:mm」形式の文字列に整形する */
+function formatDateRange_(start, end) {
+  return Utilities.formatDate(start, 'Asia/Tokyo', 'yyyy/MM/dd(EEE) HH:mm') +
+    ' - ' + Utilities.formatDate(end, 'Asia/Tokyo', 'HH:mm');
+}
+
 /**
  * 告知メッセージの blocks とフォールバック text を組み立てる。
  * @param {Object} ev イベント
@@ -33,8 +39,7 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
   const cancelled = isCancelledStatus_(ev.status);
   const ended = ev.end.getTime() < Date.now();
 
-  const dateLabel = Utilities.formatDate(ev.start, 'Asia/Tokyo', 'yyyy/MM/dd(EEE) HH:mm') +
-    ' - ' + Utilities.formatDate(ev.end, 'Asia/Tokyo', 'HH:mm');
+  const dateLabel = formatDateRange_(ev.start, ev.end);
   const titleLabel = (cancelled ? '【中止】' : '') + escapeSlackText_(ev.title);
 
   const blocks = [];
