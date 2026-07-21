@@ -26,7 +26,12 @@ function formatDateRange_(start, end) {
 }
 
 /**
- * 告知メッセージの blocks とフォールバック text を組み立てる。
+ * 告知メッセージ（本文）の blocks とフォールバック text を組み立てる。
+ *
+ * 「目が泳ぐ」というフィードバックを受け、本文には参加ボタン・開催日時・
+ * 場所・参加状況といった“ひと目で判断に必要な情報”だけを載せる。
+ * 概要や持ち物などの詳細は buildDetailBlocks_ 側でスレッドへ投稿する。
+ *
  * @param {Object} ev イベント
  * @param {Array} participants listParticipants_ の結果
  * @param {string} participantsUrl 参加者確認WebページURL
@@ -50,20 +55,7 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
     ':calendar: 日時: ' + dateLabel + '\n' +
     ':round_pushpin: 場所: ' + escapeSlackText_(ev.location || '（未定）') + '\n' +
     ':bust_in_silhouette: 主催: <@' + ev.organizer + '>';
-  if (needsMeetSplit_(ev)) {
-    headerText += '\n:bulb: 無料版Meetのため60分ごとに接続が切れます。切れたら同じURLから再入室してください。';
-  }
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: headerText } });
-
-  // ---- 概要・事前準備 ----
-  let detail = '*概要・対象者*\n' + escapeSlackText_(ev.description);
-  if (ev.preparation) {
-    detail += '\n\n*事前準備・持ち物・資料リンク*\n' + escapeSlackText_(ev.preparation);
-  }
-  blocks.push({
-    type: 'section',
-    text: { type: 'mrkdwn', text: truncateForBlock_(detail, 3000) }
-  });
 
   blocks.push({ type: 'divider' });
 
@@ -130,6 +122,14 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
     });
   }
 
+  // ---- 詳細への導線（概要・持ち物などはスレッドに投稿している）----
+  if (!cancelled) {
+    blocks.push({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: ':thread: 概要・対象者・持ち物などの詳細は、このメッセージのスレッドをご覧ください。' }]
+    });
+  }
+
   // ---- フッター（参加者確認ページ）----
   if (participantsUrl) {
     blocks.push({
@@ -143,11 +143,73 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
   return { text: fallback, blocks: blocks };
 }
 
-/** 最新の参加状況で告知メッセージを再描画する */
+/**
+ * スレッドへ投稿する「詳細情報」の blocks とフォールバック text を組み立てる。
+ * 本文（buildAnnouncementBlocks_）から切り出した概要・事前準備・Meet補足を載せる。
+ * 概要と事前準備は section を分け、それぞれ Block Kit の上限（3000文字）まで使えるようにする。
+ * @param {Object} ev イベント
+ * @return {{text: string, blocks: Array}}
+ */
+function buildDetailBlocks_(ev) {
+  const blocks = [];
+
+  blocks.push({
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: truncateForBlock_('*概要・対象者*\n' + escapeSlackText_(ev.description), 3000)
+    }
+  });
+
+  if (ev.preparation) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: truncateForBlock_('*事前準備・持ち物・資料リンク*\n' + escapeSlackText_(ev.preparation), 3000)
+      }
+    });
+  }
+
+  if (needsMeetSplit_(ev)) {
+    blocks.push({
+      type: 'context',
+      elements: [{
+        type: 'mrkdwn',
+        text: ':bulb: 無料版Meetのため60分ごとに接続が切れます。切れたら同じURLから再入室してください。'
+      }]
+    });
+  }
+
+  return { text: escapeSlackText_(ev.title) + ' の詳細情報', blocks: blocks };
+}
+
+/** 最新の参加状況で告知メッセージ（本文）を再描画する */
 function refreshAnnouncement_(config, ev) {
   if (!ev.slackTs) return;
   const participants = listParticipants_(config, ev.eventId);
   const participantsUrl = buildParticipantsPageUrl_(config, ev.eventId);
   const msg = buildAnnouncementBlocks_(ev, participants, participantsUrl);
   updateMessageBlocks_(config, ev.slackChannel, ev.slackTs, msg.text, msg.blocks);
+}
+
+/**
+ * スレッドの詳細情報を最新のイベント内容で更新する。
+ * 概要・持ち物は参加状況では変わらないため、内容が変わり得る編集時のみ呼ぶ
+ * （ボタン押下の頻繁な再描画では呼ばず、無駄な chat.update を避ける）。
+ * detailTs が無い旧イベントは、この機会にスレッドへ詳細を投稿して ts を保存する
+ * （本文からは詳細を外したため、旧イベントでも情報が失われないようにする）。
+ */
+function refreshDetailThread_(config, ev) {
+  if (!ev.slackTs) return;
+  const msg = buildDetailBlocks_(ev);
+  if (ev.detailTs) {
+    updateMessageBlocks_(config, ev.slackChannel, ev.detailTs, msg.text, msg.blocks);
+    return;
+  }
+  const ts = postMessage_(config, ev.slackChannel, msg.text, ev.slackTs, msg.blocks);
+  if (ts) {
+    ev.detailTs = ts;
+    updateEvent_(config, ev);
+  }
 }

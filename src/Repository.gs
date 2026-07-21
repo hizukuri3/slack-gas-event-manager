@@ -59,6 +59,8 @@ function eventToRow_(ev) {
   row[COL.CREATED_AT] = ev.createdAt;
   row[COL.UPDATED_AT] = ev.updatedAt;
   row[COL.TYPE] = ev.type || EVENT_TYPE.DISCIPLE;
+  // 詳細スレッドのtsも告知tsと同様に桁落ち防止で先頭にアポストロフィを付ける
+  row[COL.DETAIL_TS] = ev.detailTs ? "'" + ev.detailTs : '';
   return row;
 }
 
@@ -83,7 +85,9 @@ function rowToEvent_(row) {
     editUrl: row[COL.EDIT_URL],
     createdAt: row[COL.CREATED_AT],
     updatedAt: row[COL.UPDATED_AT],
-    type: row[COL.TYPE] || EVENT_TYPE.DISCIPLE
+    type: row[COL.TYPE] || EVENT_TYPE.DISCIPLE,
+    // 旧データ（列が存在しない行）では undefined になるため空文字にフォールバック
+    detailTs: row[COL.DETAIL_TS] ? String(row[COL.DETAIL_TS]) : ''
   };
 }
 
