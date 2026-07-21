@@ -19,6 +19,29 @@ function truncateForBlock_(text, limit) {
   return s.length > limit ? s.substring(0, limit - 1) + '…' : s;
 }
 
+/**
+ * 本文に載せる概要プレビューの文字数上限。
+ * 概要は「内容が分かってスレッドを開く気になる」よう本文の上部に必ず載せるが、
+ * 長すぎて目が泳がないよう、これを超える分はスレッドの完全版に委ねる。
+ */
+const SUMMARY_PREVIEW_LIMIT = 300;
+
+/** 概要プレビュー。上限を超える場合は切り詰めて末尾に「…」を付ける */
+function previewText_(text, limit) {
+  const s = String(text || '');
+  return s.length > limit ? s.substring(0, limit) + '…' : s;
+}
+
+/**
+ * スレッドへ詳細を分けて投稿する必要があるか。
+ * 概要が本文プレビューに収まりきらない／事前準備がある／Meet補足がある場合に true。
+ * どれも無い（短い概要だけ）のイベントは本文1通で完結させ、スレッドを作らない。
+ */
+function needsDetailThread_(ev) {
+  const descTruncated = String(ev.description || '').length > SUMMARY_PREVIEW_LIMIT;
+  return descTruncated || !!ev.preparation || needsMeetSplit_(ev);
+}
+
 /** 開催日時レンジを「yyyy/MM/dd(EEE) HH:mm - HH:mm」形式の文字列に整形する */
 function formatDateRange_(start, end) {
   return Utilities.formatDate(start, 'Asia/Tokyo', 'yyyy/MM/dd(EEE) HH:mm') +
@@ -29,8 +52,9 @@ function formatDateRange_(start, end) {
  * 告知メッセージ（本文）の blocks とフォールバック text を組み立てる。
  *
  * 「目が泳ぐ」というフィードバックを受け、本文には参加ボタン・開催日時・
- * 場所・参加状況といった“ひと目で判断に必要な情報”だけを載せる。
- * 概要や持ち物などの詳細は buildDetailBlocks_ 側でスレッドへ投稿する。
+ * 場所・参加状況に加え、内容が伝わる“概要”までを載せる（概要が無いと
+ * そもそもスレッドを開こうと思えないため）。事前準備・持ち物・資料リンクや、
+ * 長い概要の続きは buildDetailBlocks_ 側でスレッドへ投稿する。
  *
  * @param {Object} ev イベント
  * @param {Array} participants listParticipants_ の結果
@@ -56,6 +80,17 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
     ':round_pushpin: 場所: ' + escapeSlackText_(ev.location || '（未定）') + '\n' +
     ':bust_in_silhouette: 主催: <@' + ev.organizer + '>';
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: headerText } });
+
+  // ---- 概要（内容が伝わるよう本文の上部に載せる。長い場合はプレビュー）----
+  if (!cancelled) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: '*概要・対象者*\n' + escapeSlackText_(previewText_(ev.description, SUMMARY_PREVIEW_LIMIT))
+      }
+    });
+  }
 
   blocks.push({ type: 'divider' });
 
@@ -122,11 +157,11 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
     });
   }
 
-  // ---- 詳細への導線（概要・持ち物などはスレッドに投稿している）----
-  if (!cancelled) {
+  // ---- 詳細への導線（事前準備・持ち物などはスレッドに投稿している）----
+  if (!cancelled && needsDetailThread_(ev)) {
     blocks.push({
       type: 'context',
-      elements: [{ type: 'mrkdwn', text: ':thread: 概要・対象者・持ち物などの詳細は、このメッセージのスレッドをご覧ください。' }]
+      elements: [{ type: 'mrkdwn', text: ':thread: 概要の続き・事前準備・持ち物・資料リンクは、このメッセージのスレッドをご覧ください。' }]
     });
   }
 
@@ -202,11 +237,15 @@ function refreshAnnouncement_(config, ev) {
  */
 function refreshDetailThread_(config, ev) {
   if (!ev.slackTs) return;
-  const msg = buildDetailBlocks_(ev);
+  // 既にスレッドがあれば内容を最新化する（事前準備が消えても空更新で追随）
   if (ev.detailTs) {
+    const msg = buildDetailBlocks_(ev);
     updateMessageBlocks_(config, ev.slackChannel, ev.detailTs, msg.text, msg.blocks);
     return;
   }
+  // まだスレッドが無く、かつ詳細が必要になった場合だけ新規投稿してtsを保存する
+  if (!needsDetailThread_(ev)) return;
+  const msg = buildDetailBlocks_(ev);
   const ts = postMessage_(config, ev.slackChannel, msg.text, ev.slackTs, msg.blocks);
   if (ts) {
     ev.detailTs = ts;

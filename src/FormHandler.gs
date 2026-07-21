@@ -290,11 +290,14 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
   const ts = postMessage_(config, config.slackChannelId, msg.text, null, msg.blocks);
   if (ts) {
     ev.slackTs = ts;
-    // 概要・持ち物などの詳細は、本文を長くしないようスレッド返信として投稿する
-    const detailMsg = buildDetailBlocks_(ev);
-    const detailTs = postMessage_(config, config.slackChannelId, detailMsg.text, ts, detailMsg.blocks);
-    if (detailTs) {
-      ev.detailTs = detailTs;
+    // 概要の続き・事前準備・持ち物などは、本文を長くしないようスレッド返信へ回す
+    // （短い概要だけで完結するイベントはスレッドを作らない）
+    if (needsDetailThread_(ev)) {
+      const detailMsg = buildDetailBlocks_(ev);
+      const detailTs = postMessage_(config, config.slackChannelId, detailMsg.text, ts, detailMsg.blocks);
+      if (detailTs) {
+        ev.detailTs = detailTs;
+      }
     }
   }
 
