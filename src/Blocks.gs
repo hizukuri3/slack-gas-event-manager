@@ -29,6 +29,7 @@ function truncateForBlock_(text, limit) {
 function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
   const joined = participants.filter(function (p) { return p.status === PSTATUS.JOINED; });
   const waitlist = participants.filter(function (p) { return p.status === PSTATUS.WAITLIST; });
+  const staff = participants.filter(function (p) { return p.status === PSTATUS.STAFF; });
   const remaining = Math.max(0, ev.capacity - joined.length);
   const cancelled = isCancelledStatus_(ev.status);
   const ended = ev.end.getTime() < Date.now();
@@ -72,6 +73,9 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
     if (waitlist.length > 0) {
       statusText += '　:hourglass_flowing_sand: キャンセル待ち ' + waitlist.length + '名';
     }
+    if (staff.length > 0) {
+      statusText += '　:busts_in_silhouette: 運営 ' + staff.length + '名（定員外）';
+    }
   }
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: statusText } });
 
@@ -90,6 +94,17 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
     });
   }
 
+  // ---- 運営（定員外）の列挙 ----
+  if (!cancelled && staff.length > 0) {
+    const staffNames = staff
+      .map(function (p) { return escapeSlackText_(p.displayName); })
+      .join('、');
+    blocks.push({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: '運営: ' + truncateForBlock_(staffNames, 3000) }]
+    });
+  }
+
   // ---- 操作ボタン（中止・終了後は表示しない）----
   if (!cancelled && !ended) {
     const joinButton = remaining > 0
@@ -101,6 +116,9 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
       type: 'actions',
       elements: [
         joinButton,
+        // 運営（師匠・主催者・運営スタッフ）用。満員でも定員外で常に参加できる
+        { type: 'button', action_id: ACTION_JOIN_STAFF, value: ev.eventId,
+          text: { type: 'plain_text', text: '🛡 運営として参加', emoji: true } },
         { type: 'button', action_id: ACTION_LEAVE, value: ev.eventId,
           text: { type: 'plain_text', text: '取り消す', emoji: true } }
       ]

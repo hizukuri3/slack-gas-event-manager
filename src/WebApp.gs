@@ -19,6 +19,7 @@ function doGet(e) {
   const participants = listParticipants_(config, eventId);
   const joined = participants.filter(function (p) { return p.status === PSTATUS.JOINED; });
   const waitlist = participants.filter(function (p) { return p.status === PSTATUS.WAITLIST; });
+  const staff = participants.filter(function (p) { return p.status === PSTATUS.STAFF; });
   const dateLabel = Utilities.formatDate(ev.start, 'Asia/Tokyo', 'yyyy/MM/dd(EEE) HH:mm') +
     ' - ' + Utilities.formatDate(ev.end, 'Asia/Tokyo', 'HH:mm');
 
@@ -28,7 +29,8 @@ function doGet(e) {
   }
   body += '<p class="meta">' + escapeHtml_(dateLabel) + '</p>';
   body += '<p class="meta">参加者: ' + joined.length + ' / 定員 ' + ev.capacity + '名' +
-    (waitlist.length > 0 ? '（キャンセル待ち ' + waitlist.length + '名）' : '') + '</p>';
+    (waitlist.length > 0 ? '（キャンセル待ち ' + waitlist.length + '名）' : '') +
+    (staff.length > 0 ? '（運営 ' + staff.length + '名・定員外）' : '') + '</p>';
 
   if (joined.length === 0) {
     body += '<p class="empty">まだ参加者はいません。</p>';
@@ -42,6 +44,13 @@ function doGet(e) {
   if (waitlist.length > 0) {
     body += '<h2>キャンセル待ち（先着順で自動繰り上げ）</h2><ol class="participants waitlist">';
     waitlist.forEach(function (p) {
+      body += '<li>' + escapeHtml_(p.displayName) + '</li>';
+    });
+    body += '</ol>';
+  }
+  if (staff.length > 0) {
+    body += '<h2>運営（定員外）</h2><ol class="participants staff">';
+    staff.forEach(function (p) {
       body += '<li>' + escapeHtml_(p.displayName) + '</li>';
     });
     body += '</ol>';
@@ -62,6 +71,7 @@ function renderPage_(title, body) {
     'h1{font-size:1.4rem;border-bottom:2px solid #4a90d9;padding-bottom:8px;}' +
     'h2{font-size:1rem;margin-top:24px;color:#4a90d9;}' +
     '.waitlist{color:#888;}' +
+    '.staff{color:#2e7d5b;}' +
     '.meta{color:#666;margin:4px 0;}' +
     '.cancelled{color:#c0392b;font-weight:bold;}' +
     '.participants li{margin:4px 0;}' +

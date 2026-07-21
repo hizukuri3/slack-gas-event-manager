@@ -12,7 +12,8 @@ const SHEET_PARTICIPANTS = '参加者リスト';
 // ---- 参加者の状態 ----
 const PSTATUS = {
   JOINED: '参加',
-  WAITLIST: 'キャンセル待ち'
+  WAITLIST: 'キャンセル待ち',
+  STAFF: '運営'  // 師匠・主催者・運営スタッフ。定員カウント・キャンセル待ちの対象外
 };
 
 // ---- イベント種別（どちらのフォームから登録されたかで一意に決まる）----
@@ -23,6 +24,7 @@ const EVENT_TYPE = {
 
 // ---- 告知メッセージのボタン action_id ----
 const ACTION_JOIN = 'join_event';
+const ACTION_JOIN_STAFF = 'join_event_staff';  // 運営として参加（定員外）
 const ACTION_LEAVE = 'leave_event';
 
 // ---- イベントマスターの列定義（0始まり）----
