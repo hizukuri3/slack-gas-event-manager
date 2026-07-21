@@ -396,6 +396,10 @@ function notifyScheduleChange_(config, ev, prevStart, prevEnd) {
   }
 
   // 2. 参加者・キャンセル待ちの各人へDM（時間変更は双方に影響するため両方へ送る）
+  // DMは告知チャンネルと別の場所に届くため、告知メッセージへのリンクを添えて
+  // どのイベントかをすぐ辿れるようにする（同名の連続講座がある場合の取り違え防止）。
+  const permalink = ev.slackTs ? getPermalink_(config, ev.slackChannel, ev.slackTs) : '';
+  const linkLine = permalink ? '\n▶ 告知を見る: ' + permalink : '';
   listParticipants_(config, ev.eventId).forEach(function (p) {
     const suffix = p.status === PSTATUS.WAITLIST ? '（現在キャンセル待ちで登録中です）' : '';
     sendDirectMessage_(
@@ -403,7 +407,8 @@ function notifyScheduleChange_(config, ev, prevStart, prevEnd) {
       ':alarm_clock: 参加登録中のイベント「' + ev.title + '」の開催日時が変更されました。' + suffix + '\n' +
       '• 変更前: ' + before + '\n' +
       '• 変更後: ' + after + '\n' +
-      'ご都合が合わなくなった場合は、告知メッセージの「取り消す」ボタンからキャンセルできます。'
+      'ご都合が合わなくなった場合は、告知メッセージの「取り消す」ボタンからキャンセルできます。' +
+      linkLine
     );
   });
 }
