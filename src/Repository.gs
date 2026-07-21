@@ -225,6 +225,26 @@ function countByStatus_(participants, status) {
 }
 
 /**
+ * 対象参加者の状態列を書き換える（例: 参加→運営 への切り替え）。
+ * @return {boolean} 更新が発生したか
+ */
+function setParticipantStatus_(config, eventId, userId, status) {
+  const statusColumn = PARTICIPANTS_HEADER.indexOf('状態') + 1;
+  const sheet = SpreadsheetApp.openById(config.managementSpreadsheetId)
+    .getSheetByName(SHEET_PARTICIPANTS);
+  if (!sheet) return false;
+  const values = sheet.getDataRange().getValues();
+  for (let i = 1; i < values.length; i++) {
+    if (values[i][0] === eventId && values[i][1] === userId) {
+      sheet.getRange(i + 1, statusColumn).setValue(status);
+      markPublicSyncDirty_();
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * キャンセル待ちの先頭（登録が最も早い人）を「参加」へ繰り上げる。
  * @return {?Object} 繰り上げた参加者。待ちがいなければ null
  */

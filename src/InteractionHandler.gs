@@ -43,7 +43,9 @@ function handleInteraction_(payload) {
 
   const action = (payload.actions && payload.actions[0]) || null;
   if (!action) return;
-  if (action.action_id !== ACTION_JOIN && action.action_id !== ACTION_LEAVE) return;
+  if (action.action_id !== ACTION_JOIN &&
+      action.action_id !== ACTION_JOIN_STAFF &&
+      action.action_id !== ACTION_LEAVE) return;
 
   const userId = payload.user.id;
   const responseUrl = payload.response_url;
@@ -82,9 +84,8 @@ function handleInteraction_(payload) {
   }
 
   // 表示名の取得（外部API呼び出し）はロックの外で済ませておく
-  const displayName = (action.action_id === ACTION_JOIN)
-    ? getDisplayName_(config, userId)
-    : null;
+  const isJoinAction = action.action_id === ACTION_JOIN || action.action_id === ACTION_JOIN_STAFF;
+  const displayName = isJoinAction ? getDisplayName_(config, userId) : null;
 
   // 同時押下の競合を防ぐロック。取得できなければ本人にリトライを案内
   const lock = LockService.getScriptLock();
@@ -101,9 +102,13 @@ function handleInteraction_(payload) {
   // ---- ロック内：シートの読み書きと判定のみ（通知・再描画はロック外へ）----
   let result;
   try {
-    result = (action.action_id === ACTION_JOIN)
-      ? handleJoin_(config, ev, userId, displayName)
-      : handleLeave_(config, ev, userId);
+    if (action.action_id === ACTION_JOIN) {
+      result = handleJoin_(config, ev, userId, displayName);
+    } else if (action.action_id === ACTION_JOIN_STAFF) {
+      result = handleJoinStaff_(config, ev, userId, displayName);
+    } else {
+      result = handleLeave_(config, ev, userId);
+    }
   } finally {
     lock.releaseLock();
   }
@@ -179,6 +184,53 @@ function handleJoin_(config, ev, userId, displayName) {
     feedback: ':hourglass_flowing_sand: 満員のため、キャンセル待ち *' + position + '番目* で受け付けました。\n' +
       '空きが出たら先着順で自動繰り上げし、DMでお知らせします。'
   };
+}
+
+/**
+ * 「運営として参加」ボタン：師匠・主催者・運営スタッフ用。
+ * 定員カウント・キャンセル待ちの対象外として登録するため、満員でも常に参加できる。
+ * ロック内で呼ばれるため、シート操作と判定のみを行い、通知内容は結果として返す。
+ * すでに一般参加（参加）で登録済みの人が押した場合は運営へ切り替え、
+ * 空いた1枠へキャンセル待ちを繰り上げる。
+ * @return {{changed: boolean, feedback: string, promoted: ?Object, remainingNotice: ?number}}
+ */
+function handleJoinStaff_(config, ev, userId, displayName) {
+  const result = { changed: false, feedback: '', promoted: null, remainingNotice: null };
+  const participants = listParticipants_(config, ev.eventId);
+  const mine = participants.find(function (p) { return p.userId === userId; });
+
+  if (mine && mine.status === PSTATUS.STAFF) {
+    result.feedback = ':information_source: すでに運営として登録済みです。';
+    return result;
+  }
+
+  const staffFeedback = ':white_check_mark: 「' + ev.title +
+    '」に *運営* として参加登録しました（定員には含みません）。';
+
+  if (!mine) {
+    appendParticipant_(config, ev.eventId, userId, displayName, PSTATUS.STAFF);
+    result.changed = true;
+    result.feedback = staffFeedback;
+    return result;
+  }
+
+  // 既存の登録（参加 / キャンセル待ち）を運営へ切り替える
+  const wasJoined = mine.status === PSTATUS.JOINED;
+  setParticipantStatus_(config, ev.eventId, userId, PSTATUS.STAFF);
+  result.changed = true;
+  result.feedback = staffFeedback;
+
+  // 一般参加の枠を1つ空けた場合のみ、キャンセル待ちを繰り上げる
+  if (wasJoined) {
+    const joinedAfter = countByStatus_(participants, PSTATUS.JOINED) - 1;
+    if (joinedAfter < ev.capacity) {
+      result.promoted = promoteFirstWaitlisted_(config, ev.eventId);
+      if (!result.promoted && joinedAfter === ev.capacity - 1) {
+        result.remainingNotice = ev.capacity - joinedAfter;
+      }
+    }
+  }
+  return result;
 }
 
 /**
