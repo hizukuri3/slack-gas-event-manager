@@ -20,10 +20,10 @@ function truncateForBlock_(text, limit) {
 }
 
 /**
- * スレッドへ詳細を分けて投稿する必要があるか。
- * 事前準備・持ち物・資料リンクがある／Meet補足がある場合に true。
- * どちらも無いイベントは本文1通で完結させ、スレッドを作らない。
- * （概要は省略せず常に本文へ全文載せるため、スレッド作成の条件には含めない）
+ * スレッドに実際に見せる詳細（事前準備・持ち物・資料リンク／Meet補足）があるか。
+ * 詳細スレッド自体は順番固定のため全イベントで登録時に必ず投稿するが、
+ * 本文からスレッドへの導線（「スレッドをご覧ください」）は、中身が空のときは
+ * 出さない（空のスレッドを開かせないため）。その出し分けの判定に使う。
  */
 function needsDetailThread_(ev) {
   return !!ev.preparation || needsMeetSplit_(ev);
@@ -194,12 +194,17 @@ function buildDetailBlocks_(ev) {
     });
   }
 
-  // 編集で事前準備が消され、Meet補足も無くなった場合の空更新を避けるフォールバック。
-  // （スレッドは chat.update でその場を書き換えるため、順番はずれない）
+  // 事前準備もMeet補足も無い場合の表示。
+  // 詳細スレッドは登録時に必ず先に投稿して「場所」を確保し、以降はこの1件を
+  // chat.update で書き換える。こうすることで後から持ち物を追加しても
+  // スレッドの投稿順（満席・空き枠通知などとの前後）は絶対にずれない。
   if (blocks.length === 0) {
     blocks.push({
       type: 'section',
-      text: { type: 'mrkdwn', text: '現在、事前準備・持ち物・資料リンクの登録はありません。' }
+      text: {
+        type: 'mrkdwn',
+        text: '事前準備・持ち物・資料リンクは登録されていません（追加されるとここに表示されます）。'
+      }
     });
   }
 
@@ -217,22 +222,21 @@ function refreshAnnouncement_(config, ev) {
 
 /**
  * スレッドの詳細情報を最新のイベント内容で更新する。
- * 概要・持ち物は参加状況では変わらないため、内容が変わり得る編集時のみ呼ぶ
+ * 持ち物などは参加状況では変わらないため、内容が変わり得る編集時のみ呼ぶ
  * （ボタン押下の頻繁な再描画では呼ばず、無駄な chat.update を避ける）。
- * detailTs が無い旧イベントは、この機会にスレッドへ詳細を投稿して ts を保存する
- * （本文からは詳細を外したため、旧イベントでも情報が失われないようにする）。
+ * 詳細スレッドは常に「その場を書き換える（chat.update）」ため、後から持ち物を
+ * 追加してもスレッドの投稿順はずれない。detailTs が無い旧イベントだけは、
+ * この機会にスレッドへ投稿して ts を保存し、以降の順番も固定する。
  */
 function refreshDetailThread_(config, ev) {
   if (!ev.slackTs) return;
-  // 既にスレッドがあれば内容を最新化する（事前準備が消えても空更新で追随）
+  const msg = buildDetailBlocks_(ev);
+  // 既にスレッドがあれば内容をその場で最新化する（位置は動かない）
   if (ev.detailTs) {
-    const msg = buildDetailBlocks_(ev);
     updateMessageBlocks_(config, ev.slackChannel, ev.detailTs, msg.text, msg.blocks);
     return;
   }
-  // まだスレッドが無く、かつ詳細が必要になった場合だけ新規投稿してtsを保存する
-  if (!needsDetailThread_(ev)) return;
-  const msg = buildDetailBlocks_(ev);
+  // detailTs が無い旧イベントは、ここでスレッドを確保してtsを保存する
   const ts = postMessage_(config, ev.slackChannel, msg.text, ev.slackTs, msg.blocks);
   if (ts) {
     ev.detailTs = ts;

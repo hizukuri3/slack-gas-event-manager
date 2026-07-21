@@ -290,14 +290,14 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
   const ts = postMessage_(config, config.slackChannelId, msg.text, null, msg.blocks);
   if (ts) {
     ev.slackTs = ts;
-    // 事前準備・持ち物・資料リンクは、本文を長くしないようスレッド返信へ回す
-    // （事前準備もMeet補足も無いイベントはスレッドを作らない）
-    if (needsDetailThread_(ev)) {
-      const detailMsg = buildDetailBlocks_(ev);
-      const detailTs = postMessage_(config, config.slackChannelId, detailMsg.text, ts, detailMsg.blocks);
-      if (detailTs) {
-        ev.detailTs = detailTs;
-      }
+    // 事前準備・持ち物・資料リンクは、本文を長くしないようスレッド返信へ回す。
+    // 中身の有無に関わらず必ず先にスレッドを1件投稿して「場所」を確保しておく。
+    // こうすると後から持ち物を追加してもこの1件を書き換えるだけで済み、
+    // スレッドの投稿順（満席・空き枠通知などとの前後）が絶対にずれない。
+    const detailMsg = buildDetailBlocks_(ev);
+    const detailTs = postMessage_(config, config.slackChannelId, detailMsg.text, ts, detailMsg.blocks);
+    if (detailTs) {
+      ev.detailTs = detailTs;
     }
   }
 
