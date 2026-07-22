@@ -285,7 +285,7 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
 
   // 2. Slack告知投稿（参加/取り消しボタン付きBlock Kitメッセージ）
   const participantsUrl = buildParticipantsPageUrl_(config, eventId);
-  const msg = buildAnnouncementBlocks_(ev, [], participantsUrl);
+  const msg = buildAnnouncementBlocks_(ev, [], participantsUrl, buildCalendarViewUrl_(config));
   const ts = postMessage_(config, config.slackChannelId, msg.text, null, msg.blocks);
   if (ts) {
     ev.slackTs = ts;
@@ -302,6 +302,10 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
   let dmText =
     ':white_check_mark: イベント「' + ev.title + '」を登録しました。\n' +
     '内容の変更・中止はこちらの回答編集用URLから行ってください:\n' + ev.editUrl;
+  if (calendarResult.htmlLink) {
+    // 登録内容がカレンダーへ正しく反映されたか、主催者がその場で確認できるようにする
+    dmText += '\n\n:calendar: 登録された予定を確認する:\n' + calendarResult.htmlLink;
+  }
   if (needsMeetSplit_(ev)) {
     dmText += '\n\n:bulb: 60分を超えるオンラインイベントのため、無料版Meetの制限（3人以上は60分で切断）に合わせて' +
       'カレンダー予定を' + calendarEventIds_(ev).length + 'つに分割しました。Meet URLは全予定共通です。';
@@ -368,6 +372,10 @@ function handleEventEdit_(config, existing, answers) {
   let dmText = ':pencil2: イベント「' + ev.title + '」の内容を更新しました。';
   if (scheduleChanged && isAutoMeet_(ev.format)) {
     dmText += '\n:bulb: 日時・開催形式の変更に伴い、Meet URLが再発行されています。最新のURLはSlack告知メッセージをご確認ください。';
+  }
+  const calendarUrl = buildCalendarViewUrl_(config);
+  if (calendarUrl) {
+    dmText += '\n\n:calendar: カレンダーで確認する:\n' + calendarUrl;
   }
   sendDirectMessage_(config, ev.organizer, dmText);
 }

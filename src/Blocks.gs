@@ -30,9 +30,10 @@ function formatDateRange_(start, end) {
  * @param {Object} ev イベント
  * @param {Array} participants listParticipants_ の結果
  * @param {string} participantsUrl 参加者確認WebページURL
+ * @param {string} calendarUrl 公開カレンダー（開催週）のURL
  * @return {{text: string, blocks: Array}}
  */
-function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
+function buildAnnouncementBlocks_(ev, participants, participantsUrl, calendarUrl) {
   const joined = participants.filter(function (p) { return p.status === PSTATUS.JOINED; });
   const waitlist = participants.filter(function (p) { return p.status === PSTATUS.WAITLIST; });
   const staff = participants.filter(function (p) { return p.status === PSTATUS.STAFF; });
@@ -130,11 +131,18 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl) {
     });
   }
 
-  // ---- フッター（参加者確認ページ）----
+  // ---- フッター（参加者確認ページ・カレンダー）----
+  const footerLinks = [];
   if (participantsUrl) {
+    footerLinks.push(':link: <' + participantsUrl + '|参加者リスト（リアルタイム）>');
+  }
+  if (calendarUrl) {
+    footerLinks.push(':calendar: <' + calendarUrl + '|カレンダーを開く>');
+  }
+  if (footerLinks.length > 0) {
     blocks.push({
       type: 'context',
-      elements: [{ type: 'mrkdwn', text: ':link: <' + participantsUrl + '|参加者リスト（リアルタイム）>' }]
+      elements: [{ type: 'mrkdwn', text: footerLinks.join('　') }]
     });
   }
 
@@ -148,6 +156,7 @@ function refreshAnnouncement_(config, ev) {
   if (!ev.slackTs) return;
   const participants = listParticipants_(config, ev.eventId);
   const participantsUrl = buildParticipantsPageUrl_(config, ev.eventId);
-  const msg = buildAnnouncementBlocks_(ev, participants, participantsUrl);
+  const calendarUrl = buildCalendarViewUrl_(config);
+  const msg = buildAnnouncementBlocks_(ev, participants, participantsUrl, calendarUrl);
   updateMessageBlocks_(config, ev.slackChannel, ev.slackTs, msg.text, msg.blocks);
 }
