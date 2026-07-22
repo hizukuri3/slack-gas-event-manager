@@ -58,12 +58,14 @@ function calendarEventIds_(ev) {
 
 /**
  * カレンダー予定を新規作成する（必要に応じて60分ごとに分割）。
- * @return {{calendarEventIds: string[], meetUrl: string}}
+ * htmlLink は先頭予定のもの（主催者が登録内容を確認するためのリンク）。
+ * @return {{calendarEventIds: string[], meetUrl: string, htmlLink: string}}
  */
 function createCalendarEvents_(config, ev) {
   const segments = splitSegments_(ev);
   const ids = [];
   let meetUrl = '';
+  let htmlLink = '';
   let sharedConferenceData = null;
 
   segments.forEach(function (seg, i) {
@@ -97,11 +99,12 @@ function createCalendarEvents_(config, ev) {
     ids.push(created.id);
     if (i === 0) {
       meetUrl = created.hangoutLink || '';
+      htmlLink = created.htmlLink || '';
       sharedConferenceData = created.conferenceData || null;
     }
   });
 
-  return { calendarEventIds: ids, meetUrl: meetUrl };
+  return { calendarEventIds: ids, meetUrl: meetUrl, htmlLink: htmlLink };
 }
 
 /**

@@ -157,3 +157,18 @@ function buildParticipantsPageUrl_(config, eventId) {
   if (!base) return '';
   return base + '?eventId=' + encodeURIComponent(eventId);
 }
+
+/**
+ * イベント用カレンダーの共有リンク（Googleカレンダーの「共有可能なリンク」と同じ形式）。
+ * cid の値はカレンダーIDのBase64（末尾の = は付けない）。
+ *
+ * embed 形式（参照専用ページ）ではなくこちらを使うのは、初回クリックで
+ * 「カレンダーを追加しますか？」が出て**自分の予定と重ねて見られる**ようになるため。
+ * 2回目以降は自分のカレンダーがそのまま開く。
+ * URLに /u/0 を含めるとGoogleの1アカウント目に固定されてしまうため、あえて付けない。
+ */
+function buildCalendarViewUrl_(config) {
+  if (!config.calendarId) return '';
+  const cid = Utilities.base64Encode(config.calendarId).replace(/=+$/, '');
+  return 'https://calendar.google.com/calendar?cid=' + cid;
+}
