@@ -146,6 +146,21 @@ function findEvent_(config, predicate) {
   return null;
 }
 
+/** 条件に一致するイベントをすべて管理用シートから返す */
+function listEvents_(config, predicate) {
+  const ss = SpreadsheetApp.openById(config.managementSpreadsheetId);
+  const sheet = ss.getSheetByName(SHEET_EVENT_MASTER);
+  if (!sheet) return [];
+  const values = sheet.getDataRange().getValues();
+  const result = [];
+  for (let i = 1; i < values.length; i++) {
+    if (!values[i][COL.EVENT_ID]) continue;
+    const ev = rowToEvent_(values[i]);
+    if (!predicate || predicate(ev)) result.push(ev);
+  }
+  return result;
+}
+
 /** フォーム回答IDでイベントを検索（回答編集の照合に使用） */
 function findEventByResponseId_(config, responseId) {
   return findEvent_(config, function (ev) { return ev.responseId === responseId; });

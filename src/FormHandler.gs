@@ -10,7 +10,8 @@ function setupTriggers() {
   // 二重登録を防ぐため既存の同名トリガーを削除
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     const handler = trigger.getHandlerFunction();
-    if (handler === 'onFormSubmit' || handler === 'syncPublicSheets') {
+    if (handler === 'onFormSubmit' || handler === 'syncPublicSheets' ||
+        handler === 'sendEventReminders') {
       ScriptApp.deleteTrigger(trigger);
     }
   });
@@ -18,6 +19,11 @@ function setupTriggers() {
   ScriptApp.newTrigger('syncPublicSheets')
     .timeBased()
     .everyMinutes(5)
+    .create();
+  // 開催前リマインドDM（1時間毎。判定と二重送信防止は ReminderService 側で行う）
+  ScriptApp.newTrigger('sendEventReminders')
+    .timeBased()
+    .everyHours(1)
     .create();
   // 弟子用・師匠用（設定されていれば）の両フォームにトリガーを登録
   const formIds = [config.formId];
