@@ -5,8 +5,10 @@
  *
  * 無料版Google Meetは3人以上の通話が60分で自動切断されるため、
  * 自動発行かつ60分超のイベントはカレンダー予定を60分ごとに分割登録する。
- * その際、Meet URLは先頭予定の会議情報を全区間へコピーして共通化する
- * （参加者は同じURLに再入室すればよい）。
+ * その際、区間ごとに別々のMeet会議を発行する。60分で切れても次の区間は
+ * "新品"のURLになるため、クールタイムなしで即入室できる
+ * （参加者は次の回のURLへ入り直せばよい）。各区間のURLはLOCATION列に
+ * カンマ区切りで保持する。
  */
 
 const MEET_FREE_LIMIT_MINUTES = 60;
@@ -58,15 +60,15 @@ function calendarEventIds_(ev) {
 
 /**
  * カレンダー予定を新規作成する（必要に応じて60分ごとに分割）。
+ * 自動発行Meetは区間ごとに別々の会議を発行する（meetUrls が区間順のURL配列）。
  * htmlLink は先頭予定のもの（主催者が登録内容を確認するためのリンク）。
- * @return {{calendarEventIds: string[], meetUrl: string, htmlLink: string}}
+ * @return {{calendarEventIds: string[], meetUrls: string[], htmlLink: string}}
  */
 function createCalendarEvents_(config, ev) {
   const segments = splitSegments_(ev);
   const ids = [];
-  let meetUrl = '';
+  const meetUrls = [];
   let htmlLink = '';
-  let sharedConferenceData = null;
 
   segments.forEach(function (seg, i) {
     const resource = {
@@ -77,18 +79,14 @@ function createCalendarEvents_(config, ev) {
     const options = {};
 
     if (isAutoMeet_(ev.format)) {
-      if (i === 0) {
-        // 先頭区間でMeet会議を新規発行
-        resource.conferenceData = {
-          createRequest: {
-            requestId: ev.eventId,
-            conferenceSolutionKey: { type: 'hangoutsMeet' }
-          }
-        };
-      } else {
-        // 2区間目以降は先頭の会議情報をコピーして同一Meet URLを使い回す
-        resource.conferenceData = sharedConferenceData;
-      }
+      // 区間ごとに別々のMeet会議を発行する。requestId を区間ごとに一意にすることで
+      // それぞれ独立した会議になり、60分で切れても次の区間は待ち時間なしで入室できる。
+      resource.conferenceData = {
+        createRequest: {
+          requestId: ev.eventId + '_' + i,
+          conferenceSolutionKey: { type: 'hangoutsMeet' }
+        }
+      };
       options.conferenceDataVersion = 1;
     } else {
       // 手動URL・オフラインは入力テキストをそのまま「場所」欄へ格納（分割もしない）
@@ -97,14 +95,36 @@ function createCalendarEvents_(config, ev) {
 
     const created = Calendar.Events.insert(resource, config.calendarId, options);
     ids.push(created.id);
+    if (isAutoMeet_(ev.format)) {
+      meetUrls.push(created.hangoutLink || '');
+    }
     if (i === 0) {
-      meetUrl = created.hangoutLink || '';
       htmlLink = created.htmlLink || '';
-      sharedConferenceData = created.conferenceData || null;
     }
   });
 
-  return { calendarEventIds: ids, meetUrl: meetUrl, htmlLink: htmlLink };
+  return { calendarEventIds: ids, meetUrls: meetUrls, htmlLink: htmlLink };
+}
+
+/** 自動発行Meetの各区間URL（LOCATION列にカンマ区切りで保持）。Meet以外は空配列 */
+function meetUrls_(ev) {
+  if (!isAutoMeet_(ev.format)) return [];
+  return String(ev.location || '').split(',').filter(function (u) { return u !== ''; });
+}
+
+/**
+ * 分割Meetの「各回の時間＋URL」表示行を組み立てる。
+ * 分割なし（単一予定）や非Meetの場合は null を返す（呼び出し側は従来の場所表示を使う）。
+ * @return {?string[]} 例: ['第1回 20:00-21:00　https://meet.google.com/xxx', ...]
+ */
+function meetScheduleLines_(ev) {
+  if (!needsMeetSplit_(ev)) return null;
+  const urls = meetUrls_(ev);
+  return splitSegments_(ev).map(function (seg, i) {
+    const time = Utilities.formatDate(seg.start, 'Asia/Tokyo', 'HH:mm') + '-' +
+      Utilities.formatDate(seg.end, 'Asia/Tokyo', 'HH:mm');
+    return '第' + (i + 1) + '回 ' + time + '　' + (urls[i] || '（URL未取得）');
+  });
 }
 
 /**
@@ -119,8 +139,8 @@ function updateCalendarEvents_(config, ev, scheduleChanged) {
     deleteCalendarEvents_(config, ev);
     const result = createCalendarEvents_(config, ev);
     ev.calendarEventId = result.calendarEventIds.join(',');
-    if (isAutoMeet_(ev.format) && result.meetUrl) {
-      ev.location = result.meetUrl;
+    if (isAutoMeet_(ev.format) && result.meetUrls.length) {
+      ev.location = result.meetUrls.join(',');
     }
     return ev;
   }
@@ -140,8 +160,8 @@ function updateCalendarEvents_(config, ev, scheduleChanged) {
 function buildCalendarDescription_(ev, participantsUrl, slackPermalink) {
   const lines = [];
   if (needsMeetSplit_(ev)) {
-    lines.push('※無料版Google Meetの制限により60分ごとに接続が切れます。');
-    lines.push('　切れたら同じMeet URLから再入室してください（URLは全予定共通）。');
+    lines.push('※無料版Google Meetの60分制限に合わせ、この予定は60分ごとに分割されています。');
+    lines.push('　各回で別々のMeet URLになっています。次の回は次のカレンダー予定を開いてください（待ち時間なしで入れます）。');
     lines.push('');
   }
   lines.push('【概要・対象者】');
