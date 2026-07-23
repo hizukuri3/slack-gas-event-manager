@@ -47,12 +47,20 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl, calendarUrl
   const blocks = [];
 
   // ---- ヘッダー（イベント基本情報）----
+  const scheduleLines = meetScheduleLines_(ev);
   let headerText = ':loudspeaker: *' + titleLabel + '*\n' +
-    ':calendar: 日時: ' + dateLabel + '\n' +
-    ':round_pushpin: 場所: ' + escapeSlackText_(ev.location || '（未定）') + '\n' +
-    ':bust_in_silhouette: 主催: <@' + ev.organizer + '>';
-  if (needsMeetSplit_(ev)) {
-    headerText += '\n:bulb: 無料版Meetのため60分ごとに接続が切れます。切れたら同じURLから再入室してください。';
+    ':calendar: 日時: ' + dateLabel + '\n';
+  if (scheduleLines) {
+    // 分割Meet：区間ごとに別URLなので、各回の時間とURLを一覧で示す
+    headerText += ':round_pushpin: 各回のMeet URL（60分ごとに切り替え）:\n' +
+      scheduleLines.map(function (l) { return '　' + escapeSlackText_(l); }).join('\n') + '\n';
+  } else {
+    headerText += ':round_pushpin: 場所: ' + escapeSlackText_(ev.location || '（未定）') + '\n';
+  }
+  headerText += ':bust_in_silhouette: 主催: <@' + ev.organizer + '>';
+  if (scheduleLines) {
+    headerText += '\n:bulb: 無料版Meetの60分制限に合わせ、各回で新しいMeet URLに切り替わります。' +
+      '切れたら次の回のURLに入り直してください（待ち時間なしで入れます）。';
   }
   blocks.push({ type: 'section', text: { type: 'mrkdwn', text: headerText } });
 

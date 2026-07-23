@@ -46,8 +46,8 @@ function applyFormHints_(formId) {
       item.setHelpText(
         '①オンライン・自動発行は無料版Google Meetを使用します。' +
         '3人以上の通話は60分で自動切断されるため、60分を超えるイベントは' +
-        'カレンダー予定が60分ごとに自動分割されます（Meet URLは全予定共通。' +
-        '切れたら同じURLで再入室）。切断なしで開催したい場合は' +
+        'カレンダー予定が60分ごとに自動分割されます（各回で別々のMeet URLを発行。' +
+        '切れても次の回のURLへ待ち時間なしで入室可能）。切断なしで開催したい場合は' +
         '②を選び、時間制限のないツールのURLを入力してください。'
       );
     }
@@ -279,8 +279,9 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
   // 1. カレンダー登録（自動発行の場合はMeet URLを取得して場所に採用。60分超なら分割）
   const calendarResult = createCalendarEvents_(config, ev);
   ev.calendarEventId = calendarResult.calendarEventIds.join(',');
-  if (isAutoMeet_(ev.format) && calendarResult.meetUrl) {
-    ev.location = calendarResult.meetUrl;
+  if (isAutoMeet_(ev.format) && calendarResult.meetUrls.length) {
+    // 区間ごとのMeet URLをカンマ区切りで保持（分割なしなら1件）
+    ev.location = calendarResult.meetUrls.join(',');
   }
 
   // 2. Slack告知投稿（参加/取り消しボタン付きBlock Kitメッセージ）
@@ -308,7 +309,8 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
   }
   if (needsMeetSplit_(ev)) {
     dmText += '\n\n:bulb: 60分を超えるオンラインイベントのため、無料版Meetの制限（3人以上は60分で切断）に合わせて' +
-      'カレンダー予定を' + calendarEventIds_(ev).length + 'つに分割しました。Meet URLは全予定共通です。';
+      'カレンダー予定を' + calendarEventIds_(ev).length + 'つに分割しました。各回で別々のMeet URLになっており' +
+      '（切れても次の回のURLへ待ち時間なしで入室可能）、URL一覧はSlack告知メッセージに掲載しています。';
   }
   sendDirectMessage_(config, ev.organizer, dmText);
 }
