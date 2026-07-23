@@ -1,0 +1,61 @@
+name: Deploy to GAS
+
+# mainブランチへPRがマージされたときだけ実行する。
+# （PRタイトルをデプロイ説明文に使いたいので push ではなく pull_request を使う）
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+# 同時に複数走らないように直列化（連続マージ時のデプロイ競合を防ぐ）
+concurrency:
+  group: gas-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # マージされたPRのときだけ。単にcloseされた（マージされていない）PRでは動かさない
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install clasp
+        # CI実績が豊富でトークン形式が安定している 2.4.2 に固定
+        run: npm install -g @google/clasp@2.4.2
+
+      - name: Write clasp credentials
+        # clasp login で生成した ~/.clasprc.json の中身をSecretから復元
+        run: echo "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+
+      - name: Write .clasp.json
+        # scriptId はVariableから。コードは src/ 配下なので rootDir を src に
+        run: |
+          cat > .clasp.json <<EOF
+          {
+            "scriptId": "${SCRIPT_ID}",
+            "rootDir": "src"
+          }
+          EOF
+        env:
+          SCRIPT_ID: ${{ vars.SCRIPT_ID }}
+
+      - name: Push source to GAS
+        run: clasp push --force
+
+      - name: Deploy (keep same /exec URL)
+        # 既存のデプロイIDを指定して再デプロイ → URLは変わらない
+        # 説明文にはマージされたPRのタイトルを使用
+        run: clasp deploy -i "$DEPLOYMENT_ID" -d "$PR_TITLE"
+        env:
+          DEPLOYMENT_ID: ${{ vars.DEPLOYMENT_ID }}
+          # インジェクション防止のためenv経由で受け渡し（タイトルに引用符等が含まれても安全）
+          PR_TITLE: ${{ github.event.pull_request.title }}
