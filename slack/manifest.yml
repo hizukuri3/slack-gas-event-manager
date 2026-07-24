@@ -31,6 +31,7 @@ oauth_config:
       - users:read        # 表示名（Display Name）の取得
       - im:write          # 主催者への編集URL通知・繰り上げ確定のDM送信
       - channels:history  # 告知メッセージのパーマリンク取得
+      - channels:read     # 現状コード未使用。将来のチャンネル情報参照用に保持
       - commands          # /event スラッシュコマンド用
 
 settings:
