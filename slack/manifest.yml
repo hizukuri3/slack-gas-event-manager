@@ -1,0 +1,43 @@
+# Slack App の構成（Single Source of Truth）
+#
+# このファイルが Slack App 設定の「正」です。設定を変えるときは必ずここを編集し、
+# その内容を Slack 管理画面に反映してください（手順は README「4-5」参照）。
+#
+# 【重要】public リポジトリのため、秘匿情報は絶対に書かないこと。
+#   - トークン類（SLACK_BOT_TOKEN / VERIFICATION_TOKEN / SIGNING_SECRET）は
+#     GAS のスクリプトプロパティ側で管理する（ここには書かない）。
+#   - GAS の /exec URL は公開エンドポイントの所在を晒さないため、
+#     プレースホルダ REPLACE_WITH_EXEC_URL のまま commit する。
+#     Slack へ貼り付けるときだけ、実際の /exec URL に置換すること。
+
+display_information:
+  name: slack-gas-event-manager
+  description: コミュニティイベントの告知・予約・定員管理
+
+features:
+  bot_user:
+    display_name: slack-gas-event-manager
+    always_online: false
+  slash_commands:
+    - command: /event
+      url: https://script.google.com/macros/s/REPLACE_WITH_EXEC_URL/exec
+      description: イベント登録フォームを開く（主催者ID入力済み）
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      - chat:write        # 告知投稿・参加状況のリアルタイム再描画・スレッド通知
+      - users:read        # 表示名（Display Name）の取得
+      - im:write          # 主催者への編集URL通知・繰り上げ確定のDM送信
+      - channels:history  # 告知メッセージのパーマリンク取得
+      - commands          # /event スラッシュコマンド用
+
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://script.google.com/macros/s/REPLACE_WITH_EXEC_URL/exec
+  # Event Subscriptions は不要（ボタン押下は Interactivity 経由で届く）
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

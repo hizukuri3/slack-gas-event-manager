@@ -6,5 +6,8 @@
 *.env
 .env*
 
+# 本物の /exec URL を埋めた Slack manifest のローカル版（貼り付け用）
+slack/manifest.local.yml
+
 # OS
 .DS_Store

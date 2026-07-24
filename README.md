@@ -208,19 +208,17 @@ flowchart LR
 
 ### 4-5. Slack Appの作成
 
-1. [api.slack.com/apps](https://api.slack.com/apps) →「Create New App」→「From scratch」でアプリを作成し、ワークスペースにインストールします。
-2. **OAuth & Permissions → Bot Token Scopes** に以下の4つを追加します。
+Slack App の構成（スコープ・スラッシュコマンド・Interactivity）は [`slack/manifest.yml`](slack/manifest.yml) が**唯一の正**です。管理画面を手作業で設定する代わりに、このマニフェストを貼り付けて作成します。
 
-   | Scope | 用途 |
-   |---|---|
-   | `chat:write` | ボタン付き告知の投稿・参加状況のリアルタイム再描画・スレッド通知 |
-   | `users:read` | 表示名（Display Name）の取得 |
-   | `im:write` | 主催者への編集URL通知・繰り上げ確定のDM送信 |
-   | `channels:history` | 告知メッセージのパーマリンク取得 |
-
-3. スコープ追加後に再インストールし、表示される **Bot User OAuth Token（`xoxb-` で始まる文字列）** を控えます。
+1. [api.slack.com/apps](https://api.slack.com/apps) →「Create New App」→ **「From an app manifest」** を選び、ワークスペースを指定します。
+2. YAML を選び、[`slack/manifest.yml`](slack/manifest.yml) の中身を貼り付けて Create します。
+   - この時点では Request URL は `REPLACE_WITH_EXEC_URL` のプレースホルダのままで構いません（GAS をデプロイした後、4-6 で実URLに差し替えます）。
+   - マニフェストには `chat:write` / `users:read` / `im:write` / `channels:history` / `commands` のスコープと `/event` コマンドが含まれています。
+3. **Install to Workspace** でインストールし、表示される **Bot User OAuth Token（`xoxb-` で始まる文字列）** を控えます。
 4. 告知チャンネルにBotを招待します（チャンネルで `/invite @アプリ名`）。**招待を忘れると告知が投稿できません。**
 5. チャンネルIDを控えます（チャンネル名を右クリック →「リンクをコピー」→ URL末尾の `C` で始まる文字列）。
+
+> **マニフェストの運用ルール:** `slack/manifest.yml` は public リポジトリにあるため、トークン類は書かず、`/exec` URL もプレースホルダのまま commit します。実URLを埋めた貼り付け用ファイルをローカルに置く場合は `slack/manifest.local.yml`（`.gitignore` 済み）を使ってください。設定を変更するときは、まず `slack/manifest.yml` を編集 → Slack App の **App Manifest** タブに貼り付けて Save、という順で反映します。**スコープを増減したときだけ、アプリの再インストール（OAuth 承認）が必要**です。
 
 ### 4-6. GAS Webアプリのデプロイ と Slackとの接続
 
@@ -228,16 +226,11 @@ flowchart LR
    - 次のユーザーとして実行: **自分**
    - アクセスできるユーザー: **全員**
 2. 発行された `https://script.google.com/macros/s/…/exec` のURLを控えます（後述の `WEBAPP_URL` にも登録します）。
-3. Slack App の **Interactivity & Shortcuts** を開き、
-   - Interactivity を **On**
-   - Request URL に上記 `/exec` URL を入力 → Save Changes
-   - （Event Subscriptions の設定は不要です。ボタン押下は Interactivity 経由で届きます）
-4. Slack App の **Slash Commands** →「Create New Command」で、イベント登録用コマンドを作成します。
-   - Command: `/event`（任意の名前で可）
-   - Request URL: 上記と同じ `/exec` URL
-   - Short Description: 「イベント登録フォームを開く（主催者ID入力済み）」
-   - 保存するとアプリに `commands` スコープが追加されるため、**アプリを再インストール**します（トークンは変わりません）。
-5. 以後コードを修正した場合は、「デプロイを管理」から**既存デプロイの新バージョン**として更新してください。「新しいデプロイ」を作るとURLが変わってしまい、Slack側の設定し直しが必要になります。
+3. 4-5 で貼り付けたマニフェストの Request URL を、実際の `/exec` URL に差し替えます。
+   - `slack/manifest.yml` 内の `REPLACE_WITH_EXEC_URL` を実URLに置換したものを用意し（ローカルの `slack/manifest.local.yml` に保存すると管理しやすい）、Slack App の **App Manifest** タブに貼り付けて **Save Changes** します。
+   - これで Interactivity の Request URL（ボタン押下用）と `/event` の Request URL が両方まとめて設定されます。Event Subscriptions は不要です。
+   - **`commands` スコープを含むマニフェストで保存した後は、アプリを再インストール**してください（トークンは変わりません）。
+4. 以後コードを修正した場合は、「デプロイを管理」から**既存デプロイの新バージョン**として更新してください（このリポジトリでは PR を main にマージすると CI が同じデプロイIDで自動更新します）。「新しいデプロイ」を作るとURLが変わり、マニフェストの差し替え＋再貼り付けが必要になります。
 
 > **署名検証についての注記:** GASのWebアプリはHTTPリクエストヘッダーを参照できないため、`X-Slack-Signature` ヘッダーと `SLACK_SIGNING_SECRET` によるHMAC署名検証は実装できません。本システムでは代替として、Slack App の Basic Information にある **Verification Token** をペイロードの `token` と照合する簡易検証を行います（`SLACK_VERIFICATION_TOKEN` 未設定時は検証をスキップします）。
 >
@@ -393,6 +386,11 @@ Slackの告知メッセージに日時・場所・Meet URLがすべて載って�
 ```
 .
 ├── README.md
+├── .github/
+│   └── workflows/
+│       └── deploy.yml      # mainマージ時にGASへ自動デプロイ（clasp push + deploy）
+├── slack/
+│   └── manifest.yml        # Slack App構成の正（スコープ・/eventコマンド・Interactivity）
 └── src/
     ├── appsscript.json      # GASマニフェスト（タイムゾーン・Calendar API・Webアプリ設定）
     ├── Config.gs            # スクリプトプロパティ読み込み・定数定義
