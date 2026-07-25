@@ -121,7 +121,7 @@ flowchart LR
 │   └── OPERATIONS.md       # 使い方・運用フロー・メンバー案内・FAQ
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml      # PRマージ時にGASへ自動デプロイ（clasp push + deploy）
+│       └── deploy.yml      # dev/prodマージ時に該当環境のGASへ自動デプロイ（clasp push + deploy）
 ├── slack/
 │   └── manifest.yml        # Slack App構成の正（スコープ・/eventコマンド・Interactivity）
 └── src/
