@@ -2,10 +2,16 @@ name: Deploy to GAS
 
 # mainブランチへPRがマージされたときだけ実行する。
 # （PRタイトルをデプロイ説明文に使いたいので push ではなく pull_request を使う）
+#
+# clasp が GAS へ push するのは src/ 配下だけ（.clasp.json の rootDir: src）。
+# README・.github/・slack/manifest.yml（Slackへ手動反映）はデプロイ内容に影響しないため、
+# paths で src/ の変更を含むPRに限定し、ドキュメントのみのPRでは無駄なデプロイをしない。
 on:
   pull_request:
     types: [closed]
     branches: [main]
+    paths:
+      - "src/**"
 
 # 同時に複数走らないように直列化（連続マージ時のデプロイ競合を防ぐ）
 concurrency:
