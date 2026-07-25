@@ -36,6 +36,29 @@ jobs:
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
 
+      - name: Validate clasp credentials
+        # 認証エラーの切り分け用。Secretが空/壊れていると次の push は
+        # 「Could not read API credentials」としか出さず原因が分からないため、
+        # ここで理由つきで先に落とす。
+        # トークンの値は一切出力せず、必要なキーの有無だけを確認する（秘匿情報を漏らさない）
+        run: |
+          if [ ! -s "$HOME/.clasprc.json" ]; then
+            echo "::error::~/.clasprc.json が空です。GitHub Secret CLASPRC_JSON が未設定/空の可能性があります（gh secret set CLASPRC_JSON < ~/.clasprc.json を実行）"
+            exit 1
+          fi
+          node -e '
+            const fs = require("fs");
+            let c;
+            try { c = JSON.parse(fs.readFileSync(process.env.HOME + "/.clasprc.json", "utf8")); }
+            catch (e) { console.error("::error::clasprc.json が有効なJSONではありません: " + e.message); process.exit(1); }
+            const t = c && c.token;
+            if (!t || !t.access_token || !t.refresh_token) {
+              console.error("::error::clasprc.json に token.access_token / refresh_token がありません（clasp 2.4.2 の形式で保存されているか確認）");
+              process.exit(1);
+            }
+            console.log("clasprc OK: token.access_token/refresh_token あり, isLocalCreds=" + c.isLocalCreds);
+          '
+
       - name: Write .clasp.json
         # scriptId はVariableから。コードは src/ 配下なので rootDir を src に
         run: |
