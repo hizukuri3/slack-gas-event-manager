@@ -116,19 +116,21 @@ function deleteMessage_(config, channel, ts) {
 }
 
 /**
- * 指定メッセージに現在ついているリアクションの絵文字名を配列で返す。
- * リアクションを外した人以外がまだ押しているかの判定に使う。
+ * reactions.get でメッセージ本体（本文と現在のリアクション一覧）を取得する。
+ * 転送時の本文記録・転送可否の判定・取り消し時の残存確認をすべてこれ1本で賄う。
  *
- * API が失敗したときは空配列ではなく null を返す。呼び出し側は
- * 「リアクションが1つも無い」と「取得できなかった」を区別する必要があり、
- * 混同すると一時的な通信エラーで転送先を誤って削除してしまうため。
- * @return {?Array<string>} 取得できなければ null
+ * conversations.history ではなく reactions.get を使うのは、
+ * スレッド返信に付いたリアクションでも本体を取得できるため。
+ *
+ * 取得できなかったときは null を返す。呼び出し側は「リアクションが1つも無い」と
+ * 「取得できなかった」を区別する必要があり、混同すると一時的な通信エラーで
+ * 転送先を誤って削除してしまうため。
+ * @return {?Object} 取得できなければ null
  */
-function listReactionNames_(config, channel, ts) {
+function getReactedMessage_(config, channel, ts) {
   const json = callSlackApiGet_(config, 'reactions.get', { channel: channel, timestamp: ts });
-  if (!json.ok) return null;
-  if (!json.message || !json.message.reactions) return [];
-  return json.message.reactions.map(function (reaction) { return reaction.name; });
+  if (!json.ok || !json.message) return null;
+  return json.message;
 }
 
 /**

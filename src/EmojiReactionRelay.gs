@@ -58,6 +58,21 @@ function handleReactionAdded_(config, event) {
   });
   if (isForwarded) return;
 
+  // Slackの再送は数十分にわたって届く。その間にリアクションが外されていると、
+  // 取り消し済みのログ行は冪等判定の対象外なので再送がすり抜け、
+  // 削除したはずの転送先メッセージが復活してしまう。
+  // いま実際に押されているかを見て打ち切る。
+  // 取得に失敗したときは判断できないので、転送は止めずに続行する
+  const message = getReactedMessage_(config, srcChannel, srcTs);
+  if (message && !hasEmojiReaction_(message, emoji)) {
+    console.log('リアクションが既に外されているため転送しません: ' + emoji);
+    return;
+  }
+
+  // 転送内容は permalink だけなので、元メッセージが後から編集・削除されると
+  // 「何を転送したのか」を追えなくなる。監査用に本文をログへ控えておく
+  const srcText = truncateForLog_(message && message.text);
+
   const permalink = getPermalink_(config, srcChannel, srcTs);
   if (!permalink) return;
 
@@ -67,7 +82,7 @@ function handleReactionAdded_(config, event) {
       console.warn('転送先チャンネルが解決できません: ' + rule.toChannel);
       return;
     }
-    forwardOnce_(config, srcChannel, srcTs, emoji, destChannel, permalink);
+    forwardOnce_(config, srcChannel, srcTs, emoji, destChannel, permalink, srcText);
   });
 }
 
@@ -78,7 +93,7 @@ function handleReactionAdded_(config, event) {
  * （InteractionHandler と同じくロック保持時間を最小化する方針）。
  * 予約行は転送先TSが空のまま先に入るため、同時押しやSlackの再送はここで弾かれる。
  */
-function forwardOnce_(config, srcChannel, srcTs, emoji, destChannel, permalink) {
+function forwardOnce_(config, srcChannel, srcTs, emoji, destChannel, permalink, srcText) {
   const key = buildForwardKey_(srcChannel, srcTs, emoji, destChannel);
 
   const lock = LockService.getScriptLock();
@@ -92,7 +107,7 @@ function forwardOnce_(config, srcChannel, srcTs, emoji, destChannel, permalink) 
   let alreadyForwarded = true;
   try {
     if (findActiveForwardLogRow_(config, key) === 0) {
-      reserveForwardLog_(config, key, srcChannel, srcTs, emoji, destChannel);
+      reserveForwardLog_(config, key, srcChannel, srcTs, emoji, destChannel, srcText);
       alreadyForwarded = false;
     }
   } finally {
@@ -128,17 +143,14 @@ function handleReactionRemoved_(config, event) {
   });
   if (targets.length === 0) return;
 
-  const names = listReactionNames_(config, srcChannel, srcTs);
   // 取得できなかったときは「誰も押していない」と決めつけず、削除を見送る。
   // 一時的な通信エラーで転送先を消してしまうと復旧できないため、安全側に倒す
-  if (names === null) {
+  const message = getReactedMessage_(config, srcChannel, srcTs);
+  if (!message) {
     console.warn('reactions.get に失敗したため取り消しを見送りました: ' + srcChannel + '/' + srcTs);
     return;
   }
-  const remaining = names.some(function (name) {
-    return normalizeEmojiName_(name) === emoji;
-  });
-  if (remaining) return;
+  if (hasEmojiReaction_(message, emoji)) return;
 
   const lock = LockService.getScriptLock();
   try {
@@ -203,6 +215,13 @@ function isRelayEnabled_(value) {
  * マッピングシートには正規名を書くこと。実際に届いた名前は
  * handleReactionAdded_ のスキップログで確認できる。
  */
+/** メッセージに指定の絵文字のリアクションが今も付いているか */
+function hasEmojiReaction_(message, emoji) {
+  return (message.reactions || []).some(function (reaction) {
+    return normalizeEmojiName_(reaction.name) === emoji;
+  });
+}
+
 function normalizeEmojiName_(value) {
   return String(value || '')
     .trim()
@@ -275,10 +294,21 @@ function findActiveForwardLogRow_(config, key) {
  * chat.delete が失敗する。先頭にアポストロフィを付けて必ず文字列として保存する
  * （Repository.gs の eventToRow_ と同じ理由）。
  */
-function reserveForwardLog_(config, key, srcChannel, srcTs, emoji, destChannel) {
+function reserveForwardLog_(config, key, srcChannel, srcTs, emoji, destChannel, srcText) {
+  // 並びは RELAY_LOG_HEADER と一致させること
   getForwardLogSheet_(config).appendRow([
-    key, srcChannel, "'" + srcTs, emoji, destChannel, '', new Date(), ''
+    new Date(), emoji, srcText || '', srcChannel, destChannel, '', key, "'" + srcTs, ''
   ]);
+}
+
+/**
+ * ログに載せる本文を切り詰める。
+ * readForwardLog_ はリアクションのたびに全行を読むため、長文をそのまま溜め込むと
+ * 3秒ルールを圧迫する。監査で必要なのは冒頭なので先頭2000字に留める。
+ */
+function truncateForLog_(text) {
+  const value = String(text || '');
+  return value.length > 2000 ? value.slice(0, 2000) + '…' : value;
 }
 
 /** 予約したログ行に、転送先メッセージのtsを書き込む */
