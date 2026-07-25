@@ -71,12 +71,25 @@ function bootstrap() {
   setupPrefillEntryIds();
   logs.push('setupPrefillEntryIds() 実行済み（FORM_ENTRY_* / FORM_STATUS_OPEN_VALUE を登録）');
 
-  // ---- 手動作業の案内：共有ドライブへの移動 ----
+  // ---- 生成物のURL一覧（手動作業の動線用。ログから直接開ける）----
+  const created = scriptProps.getProperties();
   logs.push('');
-  logs.push('▼ 手動作業(1): 作成したスプレッドシート・フォームはマイドライブにあります。');
-  logs.push('  Drive の画面で共有ドライブの目的フォルダへ移動してください（IDは変わらないので動作に影響なし）。');
-  logs.push('▼ 手動作業(2): カレンダーを「一般公開（予定の詳細を表示）」に設定してください。');
-  logs.push('  未設定だとメンバーが告知の「カレンダーを開く」を押しても中身が見えません（README 4-3 参照）。');
+  logs.push('▼ 生成物（クリックで開けます）');
+  logs.push('  運営データ（管理用）  : ' + spreadsheetUrl_(created['MANAGEMENT_SPREADSHEET_ID']));
+  logs.push('  イベント一覧（公開用）: ' + spreadsheetUrl_(created['PUBLIC_SPREADSHEET_ID']));
+  logs.push('  弟子用フォーム        : ' + formEditUrl_(created['GOOGLE_FORM_ID']));
+  logs.push('  師匠用フォーム        : ' + formEditUrl_(created['MASTER_FORM_ID']));
+  logs.push('  カレンダー設定        : ' + calendarSettingsUrl_(created['GOOGLE_CALENDAR_ID']));
+
+  // ---- 手動作業の案内 ----
+  logs.push('');
+  logs.push('▼ 手動作業(1): 上のスプレッドシート・フォームはマイドライブにあります。');
+  logs.push('  Drive で共有ドライブの目的フォルダへ移動してください（IDは変わらないので動作に影響なし）。');
+  logs.push('  共有ドライブを使わない（個人で動かす）場合は、この移動は不要です。');
+  logs.push('▼ 手動作業(2): 上の「カレンダー設定」を開き、「アクセス権限」を');
+  logs.push('  「一般公開して誰でも利用できるようにする」＋「予定の表示（すべての予定の詳細）」にしてください。');
+  logs.push('  （直接開けない場合は、Googleカレンダー左の一覧で該当カレンダー →「設定と共有」）。');
+  logs.push('  未設定だとメンバーが告知の「カレンダーを開く」を押しても中身が見えません。');
 
   // ---- 5. シート初期化・トリガー・ヒント付与（Slack系プロパティが揃っていれば実行）----
   // initializeSheets()/setupTriggers() は getConfig_() 経由で SLACK_BOT_TOKEN 等を必須にするため、
@@ -126,6 +139,27 @@ function createEventForm_(name) {
   const form = FormApp.create(name);
   buildFormItems_(form);
   return form.getId();
+}
+
+/** スプレッドシートを開くURL（ログの動線用） */
+function spreadsheetUrl_(id) {
+  return id ? 'https://docs.google.com/spreadsheets/d/' + id + '/edit' : '(未作成)';
+}
+
+/** フォームの編集画面URL（ログの動線用） */
+function formEditUrl_(id) {
+  return id ? 'https://docs.google.com/forms/d/' + id + '/edit' : '(未作成)';
+}
+
+/**
+ * カレンダーの「設定と共有」ページURL（アクセス権限の変更用）。
+ * カレンダーIDのBase64をパスに載せる形式。環境によっては開けない場合があるため、
+ * その際はカレンダー一覧から手動で開く（ログにも案内を出している）。
+ */
+function calendarSettingsUrl_(id) {
+  if (!id) return '(未作成)';
+  return 'https://calendar.google.com/calendar/u/0/r/settings/calendar/' +
+    encodeURIComponent(Utilities.base64Encode(id));
 }
 
 /** FORM_SPEC に従ってフォームへ設問を追加する（順序も定義どおり） */
