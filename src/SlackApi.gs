@@ -93,3 +93,82 @@ function sendDirectMessage_(config, userId, text) {
   if (!opened.ok) return;
   postMessage_(config, opened.channel.id, text);
 }
+
+/** Slack Web API を GET で呼び出して JSON を返す */
+function callSlackApiGet_(config, method, params) {
+  const query = Object.keys(params).map(function (key) {
+    return key + '=' + encodeURIComponent(params[key]);
+  }).join('&');
+  const response = UrlFetchApp.fetch('https://slack.com/api/' + method + '?' + query, {
+    headers: { Authorization: 'Bearer ' + config.slackBotToken },
+    muteHttpExceptions: true
+  });
+  const json = JSON.parse(response.getContentText());
+  if (!json.ok) {
+    console.warn('Slack API error: ' + method + ' -> ' + json.error);
+  }
+  return json;
+}
+
+/** Bot自身が投稿したメッセージを削除する（絵文字転送の取り消しに使用） */
+function deleteMessage_(config, channel, ts) {
+  return callSlackApi_(config, 'chat.delete', { channel: channel, ts: ts });
+}
+
+/**
+ * 指定メッセージに現在ついているリアクションの絵文字名を配列で返す。
+ * リアクションを外した人以外がまだ押しているかの判定に使う。
+ *
+ * API が失敗したときは空配列ではなく null を返す。呼び出し側は
+ * 「リアクションが1つも無い」と「取得できなかった」を区別する必要があり、
+ * 混同すると一時的な通信エラーで転送先を誤って削除してしまうため。
+ * @return {?Array<string>} 取得できなければ null
+ */
+function listReactionNames_(config, channel, ts) {
+  const json = callSlackApiGet_(config, 'reactions.get', { channel: channel, timestamp: ts });
+  if (!json.ok) return null;
+  if (!json.message || !json.message.reactions) return [];
+  return json.message.reactions.map(function (reaction) { return reaction.name; });
+}
+
+/**
+ * チャンネル名（#archive / archive）をチャンネルIDへ変換する。
+ * マッピングシートを人が読み書きしやすくするためチャンネル名で書けるようにしているが、
+ * Slack API はIDしか受け付けないためここで解決する。
+ *
+ * conversations.list はページングがあり重い（実測で数百ms〜）ので、
+ * 一度引いたら全チャンネルの名前→IDをまとめて6時間キャッシュする。
+ * チャンネルIDが直接書かれていればAPIを呼ばずそのまま返す。
+ */
+function resolveChannelId_(config, channelName) {
+  const name = String(channelName || '').trim().replace(/^#/, '');
+  if (!name) return '';
+  if (/^[CG][A-Z0-9]{6,}$/.test(name)) return name;
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'ch_' + name;
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+
+  const found = {};
+  let cursor = '';
+  do {
+    const json = callSlackApiGet_(config, 'conversations.list', {
+      types: 'public_channel', exclude_archived: true, limit: 1000, cursor: cursor
+    });
+    if (!json.ok) break;
+    (json.channels || []).forEach(function (channel) {
+      found['ch_' + channel.name] = channel.id;
+    });
+    cursor = (json.response_metadata && json.response_metadata.next_cursor) || '';
+  } while (cursor);
+
+  // putAll は一度に大量投入すると失敗するため100件ずつに分けて入れる
+  const keys = Object.keys(found);
+  for (let i = 0; i < keys.length; i += 100) {
+    const chunk = {};
+    keys.slice(i, i + 100).forEach(function (key) { chunk[key] = found[key]; });
+    cache.putAll(chunk, 21600);
+  }
+  return found[cacheKey] || '';
+}

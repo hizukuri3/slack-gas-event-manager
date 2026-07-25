@@ -27,6 +27,23 @@ function doPost(e) {
       return slashResponse_(':warning: エラーが発生しました。時間をおいて再度お試しください。');
     }
   }
+  // Events API（絵文字リアクション転送）はJSONボディで届く。
+  // 上の2つはフォームPOSTなのでここまで来ない（先に return 済み）。
+  if (e && e.postData && e.postData.contents) {
+    try {
+      const body = JSON.parse(e.postData.contents);
+      // Event Subscriptions の Request URL 登録時にだけ届く疎通確認。
+      // これを返さないと登録自体が通らないため、他の処理より先に応答する
+      if (body.type === 'url_verification') {
+        return ContentService.createTextOutput(body.challenge);
+      }
+      if (body.type === 'event_callback') {
+        handleSlackEvent_(body);
+      }
+    } catch (err) {
+      console.error('Slackイベント処理でエラー: ' + err);
+    }
+  }
   return ContentService.createTextOutput('');
 }
 

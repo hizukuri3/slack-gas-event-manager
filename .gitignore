@@ -9,5 +9,9 @@
 # 本物の /exec URL を埋めた Slack manifest のローカル版（貼り付け用）
 slack/manifest.local.yml
 
+# ローカル専用（リポジトリには含めない）
+CLAUDE.md
+Makefile
+
 # OS
 .DS_Store

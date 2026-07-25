@@ -9,6 +9,9 @@
 // ---- シート名 ----
 const SHEET_EVENT_MASTER = 'イベントマスター';
 const SHEET_PARTICIPANTS = '参加者リスト';
+// 絵文字リアクション転送用。管理用①にのみ作り、公開用②へは同期しない
+const SHEET_RELAY_MAPPING = '絵文字転送マッピング';
+const SHEET_RELAY_LOG = '絵文字転送ログ';
 
 // ---- 参加者の状態 ----
 const PSTATUS = {
@@ -59,6 +62,36 @@ const EVENT_MASTER_HEADER = [
 ];
 
 const PARTICIPANTS_HEADER = ['イベントID', 'SlackユーザーID', '表示名', '状態', '登録日時'];
+
+// ---- 絵文字転送マッピングの列定義（0始まり）----
+// 人が編集するシート。同じ絵文字の行を複数書けば、その全チャンネルへ転送される
+const RELAY_COL = {
+  EMOJI: 0,        // 絵文字名（pin / :pin: のどちらの書き方でも可）
+  TO_CHANNEL: 1,   // 転送先チャンネル（#archive / archive / チャンネルID 直書きでも可）
+  ENABLED: 2,      // 有効（TRUE / 空欄で有効。FALSE で一時停止）
+  NOTE: 3          // メモ（処理には使わない）
+};
+
+const RELAY_MAPPING_HEADER = ['絵文字名', '転送先チャンネル', '有効', 'メモ'];
+
+// ---- 絵文字転送ログの列定義（0始まり）----
+// システムが書くシート。二重転送の防止と、リアクション取り消し時の削除対象の特定に使う。
+// 行は決して削除しない（監査記録として残す）。無効化は REMOVED_AT を埋める論理削除で行う
+const RELAY_LOG_COL = {
+  KEY: 0,           // 一意キー（元チャンネル#元TS#絵文字名#転送先チャンネル）
+  SRC_CHANNEL: 1,   // 転送元チャンネルID
+  SRC_TS: 2,        // 転送元メッセージのts
+  EMOJI: 3,         // 絵文字名（正規化済み）
+  DEST_CHANNEL: 4,  // 転送先チャンネルID
+  DEST_TS: 5,       // 転送先メッセージのts（投稿成功後に埋まる）
+  FORWARDED_AT: 6,  // 転送日時
+  REMOVED_AT: 7     // 取り消し日時。空なら有効な転送。埋まっていれば冪等判定の対象外
+};
+
+const RELAY_LOG_HEADER = [
+  'キー', '転送元チャンネルID', '転送元TS', '絵文字名', '転送先チャンネルID', '転送先TS',
+  '転送日時', '取り消し日時'
+];
 
 // ---- フォームの設問タイトル（フォーム側の設問名と完全一致させること）----
 const FORM_TITLES = {
