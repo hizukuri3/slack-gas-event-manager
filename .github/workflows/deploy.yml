@@ -1,7 +1,12 @@
 name: Deploy to GAS
 
-# mainブランチへPRがマージされたときだけ実行する。
+# dev / prod ブランチへPRがマージされたときだけ実行する。
 # （PRタイトルをデプロイ説明文に使いたいので push ではなく pull_request を使う）
+#
+# デプロイ先は「マージ先ブランチ」で切り替える:
+#   dev  → verification 環境（検証用ワークスペース）
+#   prod → production 環境（本番ワークスペース）
+# scriptId / deploymentId は GitHub Environments 側の変数で環境ごとに持たせる。
 #
 # clasp が GAS へ push するのは src/ 配下だけ（.clasp.json の rootDir: src）。
 # README・.github/・slack/manifest.yml（Slackへ手動反映）はデプロイ内容に影響しないため、
@@ -9,13 +14,14 @@ name: Deploy to GAS
 on:
   pull_request:
     types: [closed]
-    branches: [main]
+    branches: [dev, prod]
     paths:
       - "src/**"
 
-# 同時に複数走らないように直列化（連続マージ時のデプロイ競合を防ぐ）
+# 同じ環境向けが同時に複数走らないように直列化（連続マージ時のデプロイ競合を防ぐ）。
+# dev と prod は別グループにして互いをブロックしない。
 concurrency:
-  group: gas-deploy
+  group: gas-deploy-${{ github.event.pull_request.base.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -23,7 +29,23 @@ jobs:
     # マージされたPRのときだけ。単にcloseされた（マージされていない）PRでは動かさない
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    # マージ先が prod なら production 環境、それ以外（dev）は verification 環境。
+    # この environment に紐づく変数（SCRIPT_ID / DEPLOYMENT_ID）が下の vars.* で解決される。
+    environment: ${{ github.event.pull_request.base.ref == 'prod' && 'production' || 'verification' }}
     steps:
+      - name: Validate deploy target
+        # 選ばれた環境に SCRIPT_ID / DEPLOYMENT_ID が未登録だと、clasp が
+        # 意味不明なエラーで落ちて原因が分かりにくい。ここで理由つきで先に落とす。
+        # （例: production 環境の変数が未設定のまま prod へマージした場合）
+        run: |
+          if [ -z "${SCRIPT_ID}" ] || [ -z "${DEPLOYMENT_ID}" ]; then
+            echo "::error::環境 '${{ github.event.pull_request.base.ref == 'prod' && 'production' || 'verification' }}' に SCRIPT_ID / DEPLOYMENT_ID が未設定です。GitHub の Settings > Environments で登録してください。"
+            exit 1
+          fi
+        env:
+          SCRIPT_ID: ${{ vars.SCRIPT_ID }}
+          DEPLOYMENT_ID: ${{ vars.DEPLOYMENT_ID }}
+
       - name: Checkout
         uses: actions/checkout@v4
 
