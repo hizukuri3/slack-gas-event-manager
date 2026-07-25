@@ -401,7 +401,8 @@ Slackの告知メッセージに日時・場所・Meet URLがすべて載って�
     ├── Blocks.gs            # 告知メッセージ（Block Kit）の組み立て・再描画
     ├── InteractionHandler.gs # ボタン押下の受信（予約・キャンセル・定員管理・繰り上げ）
     ├── CalendarService.gs   # カレンダー連携（Meet自動発行含む）
-    └── WebApp.gs            # 参加者リアルタイム確認ページ（doGet）
+    ├── WebApp.gs            # 参加者リアルタイム確認ページ（doGet）
+    └── EmojiReactionRelay.gs # 絵文字リアクションでメッセージを別チャンネルへ転送
 ```
 
 ## 9. ライセンス・注意事項
