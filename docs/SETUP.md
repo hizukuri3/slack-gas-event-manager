@@ -1,63 +1,90 @@
-# セットアップ手順
+# セットアップ手順（導入・運用する人向け）
 
-構築する人向けのドキュメントです。前提条件・デプロイ運用の全体像・新しい環境の構築手順・環境変数（スクリプトプロパティ）の一覧をまとめています。システムの概要やアーキテクチャは [README](../README.md) を参照してください。
+自分のコミュニティでこのBotを**動かす**ための手順です。`bootstrap()` を使って必要な実体（スプレッドシート・フォーム・カレンダー）を用意し、Slackと接続するまでをまとめています。コードを Fork して継続開発する・CIで自動デプロイする、といった話は [DEVELOPMENT.md](DEVELOPMENT.md) を参照してください。Botの概要は [README](../README.md) にあります。
 
 ## 前提条件と準備するもの
 
 | 準備するもの | 補足 |
 |---|---|
-| Googleアカウント | フォーム・スプレッドシート・カレンダー・GASを使います。生成物を共有ドライブに置く場合は、そのドライブへの編集権限が必要です |
-| Slackワークスペース | **無料プランで動作可**。Slack Appを作成できる権限が必要です |
-| [clasp](https://github.com/google/clasp)（Node.js 環境） | **必須**。リポジトリのコードをGASプロジェクトへ入れるのに使います（初回投入・CIデプロイの両方で使用）。`npm install -g @google/clasp@2.4.2` |
-| GitHubリポジトリへの権限 | 継続的にデプロイ運用する場合。Environments 変数の登録に使います |
+| Googleアカウント | 無料アカウントでOK。フォーム・スプレッドシート・カレンダー・GASを使います。生成物を共有ドライブに置く場合は、そのドライブへの編集権限が必要です |
+| Slackワークスペース | **無料プランで動作可**。Slack Appを作成できる権限が必要です。無ければ [slack.com/create](https://slack.com/create) で新規作成します |
 
-## デプロイ運用の全体像（dev / prod）
+**この手順は追加のインストール不要で、ブラウザだけで完結できます**（コードはGASエディタにコピー&ペースト）。ターミナルに慣れていて `clasp` を使う場合は Node.js などの準備が必要です（必要な手順は下の手順2-Bにすべて含めています）。
 
-このリポジトリは **dev / prod の2環境プロモーション運用**です（[.github/workflows/deploy.yml](../.github/workflows/deploy.yml)）。
+## 導入手順
 
-- デフォルトブランチは **`dev`**。日々のPRは dev に出す → マージで **verification 環境**（検証用GAS）へ自動デプロイ。
-- **`dev → prod` のPRマージ**で **production 環境**（本番GAS）へデプロイ。
-- デプロイ先はマージ先ブランチで切り替わります（`prod` → production、それ以外（dev）→ verification）。
-- 各環境の **scriptId / deploymentId は GitHub Environments の変数**（`SCRIPT_ID` / `DEPLOYMENT_ID`）で環境ごとに保持します。Google認証（`CLASPRC_JSON`）は**リポジトリ共通の Secret**（同じGoogleアカウントで両環境へ push できるため）。
-- デプロイが走るのは **`src/**` を含むPRのマージ時のみ**。ドキュメントだけのPRではデプロイしません。
-
-> **環境変数が未登録だと安全側に落ちます:** 選ばれた環境に `SCRIPT_ID` / `DEPLOYMENT_ID` が無いと、deploy.yml が理由つきで即失敗します（例: production 環境の変数が空のまま `prod` へマージした場合）。
-
-## 新しい環境を立てる手順（bootstrap 前提）
-
-本番や新しい期など、まっさらなインスタンスを1つ立ち上げる手順です。各環境は **GASプロジェクト・スプレッドシート・フォーム・カレンダー・Slack App がすべて別物**になります。以下は一度だけ行う初期構築です。
+各インスタンスは **GASプロジェクト・スプレッドシート・フォーム・カレンダー・Slack App がすべて別物**になります。以下は一度だけ行う初期構築です。
 
 作業の流れ:
 
 1. GASプロジェクトを作る
-2. clasp でコードを入れる
+2. コードを入れる
 3. `bootstrap()` を実行して実体（スプシ・フォーム・カレンダー）を生成する
 4. 手動作業（共有ドライブへ移動・カレンダー公開）
 5. Slack App を作る
 6. Slack系プロパティを登録し `setupTriggers()` を実行する
 7. Webアプリを公開して Slack と接続する
-8. GitHub Environment に変数を登録して CI 自動デプロイを有効化する
+
+この作業では、GASエディタ・Slackの管理画面・Googleドライブなど**複数の画面を行き来します**。各手順の見出しに 📍 で「今どの画面で作業するか」を示します。
 
 ### 1. GASプロジェクトの作成
 
-[script.google.com](https://script.google.com) でスタンドアロン型のプロジェクトを新規作成します（トップページから作成。スプレッドシートからではありません）。`clasp create --type standalone` でも作れます。
+📍 **作業する画面:** ブラウザ（[script.google.com](https://script.google.com)）
 
-### 2. clasp でコードを入れる
+[script.google.com](https://script.google.com) でスタンドアロン型のプロジェクトを新規作成します（トップページから作成。スプレッドシートからではありません）。
 
-1. clasp をインストール: `npm install -g @google/clasp@2.4.2`
-2. ログイン: `clasp login`（ブラウザで承認 → `~/.clasprc.json` が生成されます）
-3. 手元に対象プロジェクトを紐づけます。既存プロジェクトなら、リポジトリ直下に `.clasp.json` を用意します（`.gitignore` 済み）。
-   ```json
-   { "scriptId": "＜作成したプロジェクトのscriptId＞", "rootDir": "src" }
+> 次の手順2で **clasp（B）を使う場合は、この手順1は不要**です（`clasp create` がプロジェクト作成まで行うため）。**ブラウザだけ（A）で進める場合はここで作成**します。
+
+### 2. コードを入れる
+
+📍 **作業する画面:** A＝GitHub（ブラウザ）＋ GASエディタ ／ B＝ターミナル
+
+`src/` 配下のコードをGASプロジェクトに入れます。追加ツール不要の「コピー&ペースト」と、ターミナルを使う「clasp」の2通りです。
+
+**A. コピー&ペースト（ブラウザだけ・インストール不要）**
+
+1. GitHub でこのリポジトリの `src/` フォルダを開きます。各 `.gs` ファイルを開いて中身をコピーします（右上の「Raw」表示だと全文コピーが楽です）。
+2. GASエディタで「＋」→「スクリプト」から同じ名前のファイルを作り、コピーした内容を貼り付けます。**`src/` の `.gs` ファイルはすべて入れてください**（`Bootstrap.gs`・`Config.gs` など、1つでも欠けると動きません）。
+3. `appsscript.json` は、GASエディタの「プロジェクトの設定」→「**appsscript.json マニフェスト ファイルをエディタで表示する**」をオンにすると編集できるようになります。表示された `appsscript.json` を、リポジトリの [`src/appsscript.json`](../src/appsscript.json) の内容で置き換えます。
+
+**B. clasp（ターミナルを使う場合・手順1は不要）**
+
+ターミナルに慣れているなら、プロジェクト作成からコード投入までコマンドで完結できます。以下だけ行えば手順1・2は完了です（この先で DEVELOPMENT.md を見に行く必要はありません）。
+
+1. **Node.js（v20 推奨）** を用意し、clasp を入れる（[nodejs.org](https://nodejs.org/) の LTS に npm 同梱）。
+   ```bash
+   npm install -g @google/clasp@2.4.2
    ```
-4. コードを送る: `clasp push`
+2. Googleアカウントでログインする。
+   ```bash
+   clasp login
+   ```
+3. [script.google.com/home/usersettings](https://script.google.com/home/usersettings) で「**Apps Script API**」を**オン**にする（オフだと次の作成・push が失敗します）。
+4. リポジトリを手元に取得する。
+   ```bash
+   git clone https://github.com/hizukuri3/slack-gas-event-manager.git
+   cd slack-gas-event-manager
+   ```
+5. 新規GASプロジェクトを作成する（`.clasp.json` が自動生成されます。`"rootDir": "src"` が入っているか確認し、無ければ追記）。
+   ```bash
+   clasp create --type standalone --title "＜プロジェクト名＞" --rootDir src
+   ```
+6. コードを送る。
+   ```bash
+   clasp push
+   ```
 
-> `clasp` を使わずGASエディタへ全 `.gs` を手でコピー&ペーストしても構いませんが、ファイル数が多いので clasp を推奨します。`appsscript.json` は「プロジェクトの設定」→「appsscript.json マニフェスト ファイルをエディタで表示する」をオンにすると編集できます（clasp push なら自動反映）。
+これで手順1・2は完了です。手順3へ進んでください。（既存プロジェクトに入れたい場合のみ、手順5の代わりに `.clasp.json`（`{ "scriptId": "…", "rootDir": "src" }`）を手書きしてから `clasp push` します。）
+
+どちらの方法でも、最後にエディタ左の「サービス ＋」に **Google Calendar API（拡張サービス）** が入っていることを確認します（`appsscript.json` 反映済みなら自動で有効になっています）。
 
 ### 3. `bootstrap()` で実体を生成
 
+📍 **作業する画面:** GASエディタ
+
 1. スクリプトプロパティに **`COHORT_NAME`**（任意）を登録します。生成ファイル名の接頭辞になります（例: `Bridge2027.03`）。
-2. GASエディタで **`bootstrap()` を選んで実行**します（初回は権限承認ダイアログが出るので許可）。以下が自動で行われます。
+   - 登録場所: GASエディタ左の ⚙「**プロジェクトの設定**」→「**スクリプト プロパティ**」→「スクリプト プロパティを追加」。この画面は手順6のプロパティ登録でも使います（一覧は下記「環境変数一覧」）。
+2. GASエディタ上部の関数選択プルダウンで **`bootstrap`** を選び、「**実行**」を押します（初回は権限承認ダイアログが出るので許可）。以下が自動で行われます。
    - 管理用スプレッドシート（`運営データ（管理用）`）・公開用（`イベント一覧（公開用）`）を作成
    - 弟子用・師匠用フォームを規定の設問構成（後述の FORM_SPEC）で作成
    - イベント用カレンダーを作成
@@ -65,23 +92,28 @@
    - `setupPrefillEntryIds()` を実行し、フォームの事前入力エントリIDを登録
 3. 冪等です。既にIDが入っているものは作り直しません。再実行しても重複は作られません。
 
-> **Slackを先に入れておくと一気に完了します:** `bootstrap()` は、`SLACK_BOT_TOKEN` などSlack系プロパティが未登録だと「次にSlackを入れて `setupTriggers()` を」と案内して正常終了します。手順6のSlackプロパティを先に登録しておけば、`bootstrap()` の1回実行で手順6の `setupTriggers()` まで自動的に流れます。
+> **この時点ではSlackはまだ作っていません:** Slack App を作るのは手順5なので、Bot Token やチャンネルIDはまだ手元にありません。そのため `bootstrap()` は実体（スプシ・フォーム・カレンダー）の生成までを行い、最後に「次にSlackを設定して `setupTriggers()` を実行してください」と案内して正常終了します。**これは想定どおりです。** 案内のとおり、手順5〜6でSlackを設定してから仕上げます。
 
 ### 4. 手動作業（共有ドライブへ移動・カレンダー公開）
 
-`bootstrap()` の実行ログの案内に従います。ここは意図的に手作業です（プログラムに共有ドライブ操作や外向きの公開をさせない方針）。
+📍 **作業する画面:** Googleドライブ ／ Googleカレンダー
+
+手順3の**実行ログに、生成物（スプシ・フォーム・カレンダー設定）のURLと手動作業の案内が出ます**。そのURLから直接開けるので、以下を行ってください。ここは意図的に手作業です（プログラムに共有ドライブ操作や外向きの公開をさせない方針）。
 
 1. **生成物を共有ドライブへ移動:** スプレッドシート・フォームは実行者のマイドライブに作られます。Driveの画面で目的の共有ドライブフォルダへドラッグしてください。**移動してもファイルIDは変わらない**ので、保存済みのIDはそのまま有効です。
+   - **共有ドライブを使わない（個人で動かす）場合は、この移動は不要**です。マイドライブに置いたままでも動作します（引き継ぎ時にファイルが個人所有のままになる点だけ留意）。
 2. **カレンダーを一般公開:** カレンダー設定 →「アクセス権限」→「一般公開して誰でも利用できるようにする」をオンにし、権限は「予定の表示（すべての予定の詳細）」を選びます（メンバー全員が同一組織なら組織内共有でも可）。ここが非公開だと、告知の「:calendar: カレンダーを開く」を押してもメンバーに中身が見えません。
 
 ### 5. Slack Appの作成
+
+📍 **作業する画面:** [api.slack.com](https://api.slack.com/apps)（Slack App管理）＋ Slackアプリ本体（チャンネル招待・ID取得）
 
 Slack App の構成（スコープ・スラッシュコマンド・Interactivity）は [`slack/manifest.yml`](../slack/manifest.yml) が**唯一の正**です。管理画面を手作業で設定する代わりに、このマニフェストを貼り付けて作成します。
 
 1. [api.slack.com/apps](https://api.slack.com/apps) →「Create New App」→ **「From an app manifest」** を選び、ワークスペースを指定します。
 2. YAML を選び、[`slack/manifest.yml`](../slack/manifest.yml) の中身を貼り付けて Create します。
    - この時点では Request URL は `REPLACE_WITH_EXEC_URL` のプレースホルダのままで構いません（GAS をデプロイした後、手順7で実URLに差し替えます）。
-   - マニフェストには `chat:write` / `users:read` / `im:write` / `channels:history` / `commands` のスコープと `/event` コマンドが含まれています。
+   - マニフェストには、告知投稿・DM・絵文字リアクション転送などに必要なスコープ、`/event` コマンド、そして**絵文字リアクション転送用の Event Subscriptions（`reaction_added` / `reaction_removed`）**が含まれています（正確な内容は [`slack/manifest.yml`](../slack/manifest.yml) を参照）。
 3. **Install to Workspace** でインストールし、表示される **Bot User OAuth Token（`xoxb-` で始まる文字列）** を控えます。
 4. 告知チャンネルにBotを招待します（チャンネルで `/invite @アプリ名`）。**招待を忘れると告知が投稿できません。**
 5. チャンネルIDを控えます（チャンネル名を右クリック →「リンクをコピー」→ URL末尾の `C` で始まる文字列）。
@@ -90,41 +122,34 @@ Slack App の構成（スコープ・スラッシュコマンド・Interactivity
 
 ### 6. スクリプトプロパティの登録と初期化
 
-1. 後述の「環境変数一覧」の**手動で登録するもの**に従い、Slack系プロパティ（`SLACK_BOT_TOKEN`・`SLACK_CHANNEL_ID` など）を登録します。
+📍 **作業する画面:** GASエディタ
+
+1. 手順5で控えた値を、手順3と同じ登録画面（「プロジェクトの設定」→「スクリプト プロパティ」）から登録します。必須は **`SLACK_BOT_TOKEN`**（手順5-3のBot Token）と **`SLACK_CHANNEL_ID`**（手順5-5のチャンネルID）。任意で `SLACK_VERIFICATION_TOKEN` なども（一覧は下記「環境変数一覧」）。
 2. GASエディタで **`setupTriggers`** を選んで**手動で1回実行**します。以下が自動で行われます。
    - フォーム送信トリガー・公開用シート定期同期トリガー（5分毎）の登録
    - 両スプレッドシートへのシート自動作成
    - フォームの「開催形式」「会場URL または 開催場所」の設問への入力ヒント設定（無料版Meetの60分制限と予定分割の説明）
-   - ※手順3でSlackプロパティを先に入れていた場合は、`bootstrap()` 実行時にここまで済んでいます。
 
 ### 7. GAS Webアプリのデプロイ と Slackとの接続
+
+📍 **作業する画面:** GASエディタ（デプロイ）→ [api.slack.com](https://api.slack.com/apps)（Request URL 差し替え）
 
 1. GASエディタ右上「デプロイ」→「新しいデプロイ」→ 種類「**ウェブアプリ**」を選び、以下で設定します。
    - 次のユーザーとして実行: **自分**
    - アクセスできるユーザー: **全員**
-2. 発行された `https://script.google.com/macros/s/…/exec` のURLを控えます（`WEBAPP_URL` にも登録します）。**このとき作られるデプロイのIDが、手順8で登録する `DEPLOYMENT_ID` になります**（「デプロイを管理」で確認できます）。
+2. 発行された `https://script.google.com/macros/s/…/exec` のURLを控えます（`WEBAPP_URL` にも登録します）。
 3. 手順5で貼り付けたマニフェストの Request URL を、実際の `/exec` URL に差し替えます。
    - `slack/manifest.yml` 内の `REPLACE_WITH_EXEC_URL` を実URLに置換したものを用意し（ローカルの `slack/manifest.local.yml` に保存すると管理しやすい）、Slack App の **App Manifest** タブに貼り付けて **Save Changes** します。
-   - これで Interactivity の Request URL（ボタン押下用）と `/event` の Request URL が両方まとめて設定されます。Event Subscriptions は不要です。
+   - これで Interactivity（ボタン押下用）・`/event`・**Event Subscriptions（絵文字リアクション転送用）** の Request URL がまとめて設定されます。貼り付け時に Slack が Event Subscriptions のURLを検証（`url_verification`）するため、**先に手順1〜2でWebアプリをデプロイ済み**にしておく必要があります（この手順の並びどおりならOK）。
    - **`commands` スコープを含むマニフェストで保存した後は、アプリを再インストール**してください（トークンは変わりません）。
 
-> **署名検証についての注記:** GASのWebアプリはHTTPリクエストヘッダーを参照できないため、`X-Slack-Signature` ヘッダーと `SLACK_SIGNING_SECRET` によるHMAC署名検証は実装できません。本システムでは代替として、Slack App の Basic Information にある **Verification Token** をペイロードの `token` と照合する簡易検証を行います（`SLACK_VERIFICATION_TOKEN` 未設定時は検証をスキップします）。
+> **署名検証についての注記:** GASのWebアプリはHTTPリクエストヘッダーを参照できないため、`X-Slack-Signature` ヘッダーと `SLACK_SIGNING_SECRET` によるHMAC署名検証は実装できません。本Botでは代替として、Slack App の Basic Information にある **Verification Token** をペイロードの `token` と照合する簡易検証を行います（`SLACK_VERIFICATION_TOKEN` 未設定時は検証をスキップします）。
 >
 > **応答速度についての注記:** Slackはボタン押下への応答を3秒以内に求めます。GASのコールドスタート時はまれに超過し、押した本人に「応答に失敗した」旨の警告が表示されることがありますが、**処理自体は正常に完了しており**、メッセージの再描画で結果を確認できます。
 
-### 8. CI 自動デプロイの有効化（GitHub Environment 変数の登録）
+以上で導入は完了です。Slackで `/event` を打ってフォームリンクが返ってくれば成功です。テスト登録をして、告知投稿 → ボタンで参加 → 取り消し → 編集URLで中止、まで一巡確認することをおすすめします。
 
-以降のコード更新を自動デプロイに乗せるための設定です。
-
-1. GitHub の **Settings → Environments** で、対象の環境（検証用なら `verification`、本番なら `production`）を開きます。
-2. その環境に **変数** を登録します。
-   - `SCRIPT_ID` … 手順1で作ったGASプロジェクトの scriptId
-   - `DEPLOYMENT_ID` … 手順7で作った最初のデプロイのID
-3. Google認証の Secret `CLASPRC_JSON`（`clasp login` で生成した `~/.clasprc.json` の中身）は**リポジトリ共通**で登録します（未登録の場合）。
-   ```bash
-   gh secret set CLASPRC_JSON < ~/.clasprc.json
-   ```
-4. 以降は、**dev へのマージ → verification**、**`dev → prod` のマージ → production** で、`src/**` を含む変更が自動デプロイされます。既存のデプロイIDを指定して再デプロイするため **`/exec` URL は変わりません**。
+> **コードを更新し続けるなら:** 以後の修正は「デプロイを管理」から**既存デプロイの新バージョン**として更新すれば `/exec` URL は変わりません。GitHub へのマージで自動デプロイに乗せる運用（dev/prod プロモーション）は [DEVELOPMENT.md](DEVELOPMENT.md) を参照してください。
 
 ## フォームの設問構成（参考）
 
