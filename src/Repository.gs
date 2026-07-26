@@ -23,6 +23,47 @@ function getOrCreateSheet_(spreadsheet, name, header) {
   return sheet;
 }
 
+/**
+ * 人が編集するシートの「有効」列に、見出しとドロップダウンを設定する。
+ * 「絵文字転送マッピング」と「師匠リスト」で共通の処理。
+ *
+ * ★ データ行のセルには一切書き込まない ★
+ * 空欄が有効を意味することは見出しで伝える。空欄へ「有効」と書き込めば
+ * 見た目は分かりやすくなるが、人が書くシートにシステムが値を入れることになり、
+ * 自分が書いていない文字がシートに現れる。ヘッダー行はもともと
+ * getOrCreateSheet_ が作る行なので、そこで伝えるぶんには筋が通る。
+ *
+ * チェックボックスにしないのは、空欄と「オフ」を見た目で区別できず、
+ * 行のコピーで意図せず外れる余地もあるため。
+ *
+ * @param {Sheet} sheet 対象シート
+ * @param {number} enabledColumn 「有効」列（0始まり）
+ */
+function setupEnabledColumn_(sheet, enabledColumn) {
+  // 見出しが書かれるのは getOrCreateSheet_ のシート作成時だけなので、
+  // 文言を変えても既存シートには反映されない。ここで追随させる
+  const headerCell = sheet.getRange(1, enabledColumn + 1);
+  if (headerCell.getValue() !== ENABLED_HEADER) headerCell.setValue(ENABLED_HEADER);
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  // 候補以外の入力を弾く（「休止」「オフ」等と書いて止めたつもりになるのを防ぐ）。
+  // ただし貼り付けは入力規則ごとセルを上書きするため、これだけでは防ぎきれない。
+  // すり抜けた値は classifyEnabledFlag_ が判定不能として拾い、運営へ知らせる。
+  // 同期のたびにここで貼り直すので、消された入力規則は次の編集で自動的に戻る。
+  //
+  // 検証範囲を1行だけ余分に広げているのは、新しく足す行にも最初から
+  // ドロップダウンを効かせるため。行が増えてから設定したのでは、
+  // その行の「有効」欄へ先に手入力されたときに素通りしてしまう
+  sheet.getRange(2, enabledColumn + 1, lastRow, 1).setDataValidation(
+    SpreadsheetApp.newDataValidation()
+      .requireValueInList(ENABLED_CHOICES, true)
+      .setAllowInvalid(false)
+      .build()
+  );
+}
+
 /** 初回セットアップ：必要なシートを作成する（手動実行用） */
 function initializeSheets() {
   const config = getConfig_();

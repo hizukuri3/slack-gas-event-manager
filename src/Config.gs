@@ -15,6 +15,13 @@ const SHEET_RELAY_LOG = '絵文字転送ログ';
 // 師匠リスト。管理用①にのみ作り、公開用②へは同期しない（運用設定のため）
 const SHEET_MASTER_LIST = '師匠リスト';
 
+// 人が編集するシートの「有効」列の見出し。
+// 空欄が有効を意味することを、シートを開いた人の目に入る場所で伝えるための文言。
+// データ行へ「有効」と書き込めば同じことは伝わるが、人が書くシートに
+// システムが値を入れることになるので、システムが元から作るヘッダー行で伝える。
+// GASはファイル内の const を上から評価するため、これを使うヘッダー定義より前に置く
+const ENABLED_HEADER = '有効（未入力＝有効）';
+
 // ---- 参加者の状態 ----
 const PSTATUS = {
   JOINED: '参加',
@@ -70,11 +77,11 @@ const PARTICIPANTS_HEADER = ['イベントID', 'SlackユーザーID', '表示名
 const RELAY_COL = {
   EMOJI: 0,        // 絵文字名（pin / :pin: のどちらの書き方でも可）
   TO_CHANNEL: 1,   // 転送先チャンネル（#archive / archive / チャンネルID 直書きでも可）
-  ENABLED: 2,      // 有効（TRUE / 空欄で有効。FALSE で一時停止）
+  ENABLED: 2,      // 有効（ドロップダウン。空欄も有効。「無効」で一時的に止める）
   NOTE: 3          // メモ（処理には使わない）
 };
 
-const RELAY_MAPPING_HEADER = ['絵文字名', '転送先チャンネル', '有効', 'メモ'];
+const RELAY_MAPPING_HEADER = ['絵文字名', '転送先チャンネル', ENABLED_HEADER, 'メモ'];
 
 // ---- 絵文字転送ログの列定義（0始まり）----
 // システムが書くシート。二重転送の防止と、リアクション取り消し時の削除対象の特定に使う。
@@ -103,11 +110,22 @@ const RELAY_LOG_HEADER = [
 const MASTER_LIST_COL = {
   USER_ID: 0,   // SlackユーザーID（U始まり。<@U123> / @U123 の形で貼り付けても可）
   NAME: 1,      // 表示名（誰の行か分かるようにするためのメモ。処理には使わない）
-  ENABLED: 2,   // 有効（TRUE / 空欄で有効。FALSE で一時停止）
+  ENABLED: 2,   // 有効（ドロップダウン。空欄も有効。「無効」で一時的に止める）
   NOTE: 3       // メモ（処理には使わない）
 };
 
-const MASTER_LIST_HEADER = ['SlackユーザーID', '表示名', '有効', 'メモ'];
+const MASTER_LIST_HEADER = ['SlackユーザーID', '表示名', ENABLED_HEADER, 'メモ'];
+
+// 「有効」列のドロップダウンの選択肢。先頭が既定値（空欄と同じ意味）。
+// 「絵文字転送マッピング」「師匠リスト」の両方で共通して使う
+const ENABLED_CHOICES = ['有効', '無効'];
+
+// 「有効」列で受け付ける書き方。ドロップダウンの選択肢と一致させ、
+// 同じ意味の語を複数用意しない（判定できない値は下の classify で可視化する）。
+// 真偽値（貼り付け等でチェックボックスの値が入った場合）は classify の
+// 真偽値の分岐が受け持つ
+const ENABLED_VALUES = ['有効'];
+const DISABLED_VALUES = ['無効'];
 
 // ---- フォームの設問タイトル（フォーム側の設問名と完全一致させること）----
 const FORM_TITLES = {
@@ -204,16 +222,30 @@ function normalizeSlackUserId_(value) {
 }
 
 /**
- * 人が編集するシートの「有効」列の判定。
- * 行を書いた時点で有効とみなしたいので空欄は有効扱いにし、
- * 明示的に FALSE / いいえ と書いたときだけ止める。
+ * 人が編集するシートの「有効」列を3つの状態に分類する。
  * 「絵文字転送マッピング」と「師匠リスト」で共通のルール。
+ *
+ * 'unknown'（どちらとも判定できない値）を有効側と別に返すのが要点。
+ * 判定できない値は従来どおり有効として扱うが、運営が「休止」「オフ」などと
+ * 書いて止めたつもりでいると、その人は師匠のまま残る。呼び出し元が
+ * これを拾って知らせることで、黙って通してしまうのを防ぐ。
+ *
+ * @return {'enabled'|'disabled'|'unknown'}
  */
-function isEnabledFlag_(value) {
-  if (value === '' || value === null || value === undefined) return true;
-  if (typeof value === 'boolean') return value;
+function classifyEnabledFlag_(value) {
+  // 行を書いた時点で有効とみなしたいので、空欄は有効扱い
+  if (value === '' || value === null || value === undefined) return 'enabled';
+  if (typeof value === 'boolean') return value ? 'enabled' : 'disabled';
+
   const text = String(value).trim().toUpperCase();
-  return text !== 'FALSE' && text !== 'NO' && text !== '0' && text !== 'いいえ';
+  if (DISABLED_VALUES.indexOf(text) !== -1) return 'disabled';
+  if (ENABLED_VALUES.indexOf(text) !== -1) return 'enabled';
+  return 'unknown';
+}
+
+/** 「有効」列が有効を意味するか。判定できない値は従来どおり有効として扱う */
+function isEnabledFlag_(value) {
+  return classifyEnabledFlag_(value) !== 'disabled';
 }
 
 /**
