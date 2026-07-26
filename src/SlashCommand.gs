@@ -25,7 +25,9 @@ function handleSlashCommand_(params) {
 
   const userId = params.user_id;
 
-  // 師匠には師匠用フォームのリンクのみを返す（弟子には非公開）
+  // 師匠には師匠用フォームのリンクのみを返す（弟子には非公開）。
+  // 誰が師匠かは「師匠リスト」シート（管理用①）で管理する。config.masterUserIds は
+  // そこから自動生成されたキャッシュで、ここでは追加の通信なしで参照できる（MasterList.gs 参照）
   const isMaster = config.masterUserIds.indexOf(userId) !== -1;
   if (isMaster && config.masterFormId) {
     const masterUrl = buildPrefilledFormUrl_(

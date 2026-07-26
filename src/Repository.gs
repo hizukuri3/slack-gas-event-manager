@@ -31,11 +31,12 @@ function initializeSheets() {
     getOrCreateSheet_(ss, SHEET_PARTICIPANTS, PARTICIPANTS_HEADER);
   });
 
-  // 絵文字転送の2シートは管理用①にのみ作る。
+  // 次の3シートは管理用①にのみ作る。
   // イベントの参加状況とは無関係な運用設定・内部ログなので公開用②へは出さない。
   const management = SpreadsheetApp.openById(config.managementSpreadsheetId);
   getOrCreateSheet_(management, SHEET_RELAY_MAPPING, RELAY_MAPPING_HEADER);
   getOrCreateSheet_(management, SHEET_RELAY_LOG, RELAY_LOG_HEADER);
+  getOrCreateSheet_(management, SHEET_MASTER_LIST, MASTER_LIST_HEADER);
 }
 
 // ==================== イベントマスター ====================

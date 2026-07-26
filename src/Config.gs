@@ -12,6 +12,8 @@ const SHEET_PARTICIPANTS = '参加者リスト';
 // 絵文字リアクション転送用。管理用①にのみ作り、公開用②へは同期しない
 const SHEET_RELAY_MAPPING = '絵文字転送マッピング';
 const SHEET_RELAY_LOG = '絵文字転送ログ';
+// 師匠リスト。管理用①にのみ作り、公開用②へは同期しない（運用設定のため）
+const SHEET_MASTER_LIST = '師匠リスト';
 
 // ---- 参加者の状態 ----
 const PSTATUS = {
@@ -96,6 +98,17 @@ const RELAY_LOG_HEADER = [
   '取り消し日時', 'キー', '転送元TS', '転送先TS'
 ];
 
+// ---- 師匠リストの列定義（0始まり）----
+// 人が編集するシート。ここに1行足すと、その人が /event で師匠用フォームを受け取れる
+const MASTER_LIST_COL = {
+  USER_ID: 0,   // SlackユーザーID（U始まり。<@U123> / @U123 の形で貼り付けても可）
+  NAME: 1,      // 表示名（誰の行か分かるようにするためのメモ。処理には使わない）
+  ENABLED: 2,   // 有効（TRUE / 空欄で有効。FALSE で一時停止）
+  NOTE: 3       // メモ（処理には使わない）
+};
+
+const MASTER_LIST_HEADER = ['SlackユーザーID', '表示名', '有効', 'メモ'];
+
 // ---- フォームの設問タイトル（フォーム側の設問名と完全一致させること）----
 const FORM_TITLES = {
   TITLE: 'イベント名',
@@ -136,9 +149,14 @@ function getConfig_() {
     // 師匠のSlackユーザーID一覧（カンマ区切り）。
     // /event コマンドで師匠用フォームのリンクを返す相手の判定にのみ使用する。
     // イベント種別の判定には使わない（種別は送信元フォームで決まる）。
+    //
+    // ★ このプロパティは手で編集しない ★
+    // 正は「師匠リスト」シート（管理用①）で、この値はそこから自動生成される
+    // 読み取り用キャッシュ。手で書き換えても次のシート編集で上書きされる。
+    // 詳細と、キャッシュを挟んでいる理由は MasterList.gs を参照。
     masterUserIds: String(props['MASTER_SLACK_USER_IDS'] || '')
       .split(',')
-      .map(function (id) { return id.trim().replace(/^<@/, '').replace(/>$/, '').replace(/^@/, ''); })
+      .map(normalizeSlackUserId_)
       .filter(function (id) { return id !== ''; }),
     // ---- フォーム事前入力URL用のエントリID ----
     // /event 応答内で FormApp.openById()（約1秒/回）を使わずに
@@ -166,6 +184,36 @@ function getConfig_() {
     throw new Error('スクリプトプロパティが未設定です: ' + missing.join(', '));
   }
   return config;
+}
+
+/**
+ * 「@名前」「<@U123>」等の揺れを補正してSlackユーザーIDだけを取り出す。
+ * フォームの「主催者のSlackユーザーID」と師匠リストシートの両方で使う。
+ * 人がSlackからコピーして貼ると `<@U123>` `<@U123|表示名>` `@U123` の
+ * どの形にもなりうるので、いずれも `U123` へ揃える。
+ * 大文字化しているのは、手入力で小文字が混ざっても Slack から届く user_id
+ * （常に大文字）と一致させるため。
+ */
+function normalizeSlackUserId_(value) {
+  return String(value || '').trim()
+    .replace(/^<@/, '')
+    .replace(/>$/, '')
+    .replace(/\|.*$/, '')   // <@U123|表示名> の表示名部分を落とす
+    .replace(/^@/, '')
+    .toUpperCase();
+}
+
+/**
+ * 人が編集するシートの「有効」列の判定。
+ * 行を書いた時点で有効とみなしたいので空欄は有効扱いにし、
+ * 明示的に FALSE / いいえ と書いたときだけ止める。
+ * 「絵文字転送マッピング」と「師匠リスト」で共通のルール。
+ */
+function isEnabledFlag_(value) {
+  if (value === '' || value === null || value === undefined) return true;
+  if (typeof value === 'boolean') return value;
+  const text = String(value).trim().toUpperCase();
+  return text !== 'FALSE' && text !== 'NO' && text !== '0' && text !== 'いいえ';
 }
 
 /**

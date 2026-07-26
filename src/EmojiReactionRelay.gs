@@ -187,22 +187,11 @@ function listForwardRules_(config, emoji) {
   const rules = [];
   for (let i = 1; i < values.length; i++) {
     if (normalizeEmojiName_(values[i][RELAY_COL.EMOJI]) !== emoji) continue;
-    if (!isRelayEnabled_(values[i][RELAY_COL.ENABLED])) continue;
+    if (!isEnabledFlag_(values[i][RELAY_COL.ENABLED])) continue;
     const toChannel = String(values[i][RELAY_COL.TO_CHANNEL] || '').trim();
     if (toChannel) rules.push({ toChannel: toChannel });
   }
   return rules;
-}
-
-/**
- * 「有効」列の判定。行を書いた時点で有効とみなしたいので空欄は有効扱いにし、
- * 明示的に FALSE / いいえ と書いたときだけ止める。
- */
-function isRelayEnabled_(value) {
-  if (value === '' || value === null || value === undefined) return true;
-  if (typeof value === 'boolean') return value;
-  const text = String(value).trim().toUpperCase();
-  return text !== 'FALSE' && text !== 'NO' && text !== '0' && text !== 'いいえ';
 }
 
 /**
