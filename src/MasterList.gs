@@ -100,23 +100,29 @@ function readMasterListSheet_(sheet) {
 function migrateMasterListIfNeeded_(sheet) {
   const scriptProps = PropertiesService.getScriptProperties();
   if (scriptProps.getProperty('MASTER_LIST_MIGRATED') === '1') return false;
+
+  // すでにシートに行があるなら、そちらが新しい運用。プロパティの値は移さない
+  const existing = sheet.getLastRow() > 1
+    ? []
+    : String(scriptProps.getProperty('MASTER_SLACK_USER_IDS') || '')
+      .split(',')
+      .map(normalizeSlackUserId_)
+      .filter(function (id) { return id !== ''; });
+
+  if (existing.length > 0) {
+    // メモ欄に出自を残す。移行後のシートを見た運営が「この行は誰が入れたのか」で
+    // 迷わないようにするためで、処理には使わない
+    sheet.getRange(2, 1, existing.length, MASTER_LIST_HEADER.length).setValues(
+      existing.map(function (id) {
+        return [id, '', '', 'スクリプトプロパティ MASTER_SLACK_USER_IDS から自動移行'];
+      })
+    );
+    SpreadsheetApp.flush();
+  }
+
+  // フラグを立てるのは書き込みが確定してから。先に立ててしまうと、書き込みが
+  // 失敗したときに「移行済みなのに空のシート」が正になり、次の反映で
+  // プロパティが空で上書きされて師匠が全員消える
   scriptProps.setProperty('MASTER_LIST_MIGRATED', '1');
-
-  // すでにシートへ書かれているなら、そちらが新しい運用。プロパティの値は捨てる
-  if (sheet.getLastRow() > 1) return false;
-
-  const existing = String(scriptProps.getProperty('MASTER_SLACK_USER_IDS') || '')
-    .split(',')
-    .map(normalizeSlackUserId_)
-    .filter(function (id) { return id !== ''; });
-  if (existing.length === 0) return false;
-
-  // メモ欄に出自を残す。移行後のシートを見た運営が「この行は誰が入れたのか」で
-  // 迷わないようにするためで、処理には使わない
-  sheet.getRange(2, 1, existing.length, MASTER_LIST_HEADER.length).setValues(
-    existing.map(function (id) {
-      return [id, '', '', 'スクリプトプロパティ MASTER_SLACK_USER_IDS から自動移行'];
-    })
-  );
-  return true;
+  return existing.length > 0;
 }
