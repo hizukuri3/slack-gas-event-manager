@@ -11,7 +11,8 @@ function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     const handler = trigger.getHandlerFunction();
     if (handler === 'onFormSubmit' || handler === 'syncPublicSheets' ||
-        handler === 'onManagementSpreadsheetEdit') {
+        handler === 'onManagementSpreadsheetEdit' ||
+        handler === 'onManagementSpreadsheetChange') {
       ScriptApp.deleteTrigger(trigger);
     }
   });
@@ -20,10 +21,16 @@ function setupTriggers() {
     .timeBased()
     .everyMinutes(5)
     .create();
-  // 管理用①の「師匠リスト」シートの編集を、その場でスクリプトプロパティへ反映する
+  // 管理用①の「師匠リスト」シートの編集を、その場でスクリプトプロパティへ反映する。
+  // onEdit（セルの値の変更）と onChange（行・シートの削除）の両方が要る。
+  // 行削除は onEdit では発火しないため、片方だけだと「消したのに効かない」が起きる
   ScriptApp.newTrigger('onManagementSpreadsheetEdit')
     .forSpreadsheet(config.managementSpreadsheetId)
     .onEdit()
+    .create();
+  ScriptApp.newTrigger('onManagementSpreadsheetChange')
+    .forSpreadsheet(config.managementSpreadsheetId)
+    .onChange()
     .create();
   // 弟子用・師匠用（設定されていれば）の両フォームにトリガーを登録
   const formIds = [config.formId];

@@ -64,6 +64,59 @@ function setupEnabledColumn_(sheet, enabledColumn) {
   );
 }
 
+// ==================== 管理用スプレッドシートのトリガー ====================
+// 人が管理用①を編集したときの入口。GAS自身の書き込みでは発火しないため、
+// 参加者リストなどへのシステム更新でここが呼ばれることはない。
+
+/**
+ * 編集トリガー（setupTriggers で登録）：セルの値の変更を拾う。
+ * 入力・貼り付け・クリア・元に戻す が該当する。
+ */
+function onManagementSpreadsheetEdit(e) {
+  if (!e || !e.range) return;
+  const name = e.range.getSheet().getName();
+
+  if (name === SHEET_MASTER_LIST) {
+    // 師匠リストは編集内容をスクリプトプロパティへ反映する必要がある
+    notifyMasterListSync_(e.source, syncMasterList());
+    return;
+  }
+  if (name === SHEET_RELAY_MAPPING) {
+    // 転送マッピングはリアクションの都度シートを直接読むので反映処理は不要。
+    // 入力規則だけ師匠リストと揃える（トーストは出さない。
+    // 反映結果という報せるべき中身が無く、毎回出しても雑音にしかならないため）
+    setupEnabledColumn_(e.range.getSheet(), RELAY_COL.ENABLED);
+  }
+}
+
+/**
+ * 変更トリガー（setupTriggers で登録）：行・シートの削除を拾う。
+ *
+ * onEdit は「セルの値の変更」でしか発火しないため、行を削除しても動かない。
+ * 師匠を外すのに行ごと削除するのは自然な操作なので、これが無いと
+ * 「消したのに効かない」（しかもトーストも出ない）という一番たちの悪い形になる。
+ * シートごと削除された場合も、ここで検知して反映を中止する。
+ *
+ * 対象は師匠リストだけ。転送マッピングは行が消えればルールが消えるだけで、
+ * 別に持っている状態が無いので追随の必要がない。
+ *
+ * onChange はどのシートが変わったかを教えてくれないため、行削除については
+ * 操作した本人が開いているシートで判定する。シート削除（REMOVE_GRID）は
+ * 削除後に別のシートが開かれるので、その判定はできず常に同期を試みる。
+ */
+function onManagementSpreadsheetChange(e) {
+  if (!e || !e.source) return;
+  const type = e.changeType;
+
+  if (type === 'REMOVE_ROW') {
+    const active = e.source.getActiveSheet();
+    if (!active || active.getName() !== SHEET_MASTER_LIST) return;
+  } else if (type !== 'REMOVE_GRID') {
+    return;
+  }
+  notifyMasterListSync_(e.source, syncMasterList());
+}
+
 /** 初回セットアップ：必要なシートを作成する（手動実行用） */
 function initializeSheets() {
   const config = getConfig_();
@@ -75,9 +128,14 @@ function initializeSheets() {
   // 次の3シートは管理用①にのみ作る。
   // イベントの参加状況とは無関係な運用設定・内部ログなので公開用②へは出さない。
   const management = SpreadsheetApp.openById(config.managementSpreadsheetId);
-  getOrCreateSheet_(management, SHEET_RELAY_MAPPING, RELAY_MAPPING_HEADER);
+  const relayMapping = getOrCreateSheet_(management, SHEET_RELAY_MAPPING, RELAY_MAPPING_HEADER);
   getOrCreateSheet_(management, SHEET_RELAY_LOG, RELAY_LOG_HEADER);
   getOrCreateSheet_(management, SHEET_MASTER_LIST, MASTER_LIST_HEADER);
+
+  // 転送マッピングは編集トリガー経由でしか整えられないため、ここで一度通しておく。
+  // でないと、誰かがそのシートを編集するまで見出しもドロップダウンも入らない
+  // （師匠リストは、この直後に呼ばれる syncMasterList が受け持つ）
+  setupEnabledColumn_(relayMapping, RELAY_COL.ENABLED);
 }
 
 // ==================== イベントマスター ====================
