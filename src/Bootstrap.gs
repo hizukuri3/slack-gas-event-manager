@@ -112,7 +112,11 @@ function bootstrap() {
     return;
   }
   setupTriggers(); // initializeSheets() / applyFormHints_() もこの中で実行される
-  logs.push('setupTriggers() 実行済み（シート初期化・フォーム送信/定期同期トリガー・ヒント付与）');
+  logs.push('setupTriggers() 実行済み（シート初期化・フォーム送信/定期同期/師匠リスト編集トリガー・ヒント付与）');
+  logs.push('');
+  logs.push('▼ 手動作業(3): 管理用スプレッドシートの「師匠リスト」シートに師匠を登録してください。');
+  logs.push('  1行1人でSlackユーザーIDを書くだけです（編集した時点で自動反映されます）。');
+  logs.push('  登録された人が /event を打つと、師匠用フォームのリンクが返るようになります。');
   logs.push('');
   logs.push('セットアップ完了。Slackで /event を打ってフォームリンクが返れば成功です。');
   console.log(logs.join('\n'));

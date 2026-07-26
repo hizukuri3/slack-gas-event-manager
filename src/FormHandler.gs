@@ -10,7 +10,8 @@ function setupTriggers() {
   // 二重登録を防ぐため既存の同名トリガーを削除
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     const handler = trigger.getHandlerFunction();
-    if (handler === 'onFormSubmit' || handler === 'syncPublicSheets') {
+    if (handler === 'onFormSubmit' || handler === 'syncPublicSheets' ||
+        handler === 'onManagementSpreadsheetEdit') {
       ScriptApp.deleteTrigger(trigger);
     }
   });
@@ -18,6 +19,11 @@ function setupTriggers() {
   ScriptApp.newTrigger('syncPublicSheets')
     .timeBased()
     .everyMinutes(5)
+    .create();
+  // 管理用①の「師匠リスト」シートの編集を、その場でスクリプトプロパティへ反映する
+  ScriptApp.newTrigger('onManagementSpreadsheetEdit')
+    .forSpreadsheet(config.managementSpreadsheetId)
+    .onEdit()
     .create();
   // 弟子用・師匠用（設定されていれば）の両フォームにトリガーを登録
   const formIds = [config.formId];
@@ -32,6 +38,9 @@ function setupTriggers() {
     applyFormHints_(formId);
   });
   initializeSheets();
+  // 師匠リストシートの内容をプロパティへ反映する。
+  // プロパティで師匠を管理していた既存インスタンスは、ここで初回移行が走る
+  syncMasterList();
 }
 
 /**
@@ -143,11 +152,6 @@ function combineEndTime_(start, value) {
   const end = new Date(start.getFullYear(), start.getMonth(), start.getDate(), Number(m[1]), Number(m[2]));
   if (end <= start) end.setDate(end.getDate() + 1);
   return end;
-}
-
-/** 「@名前」「<@U123>」等の揺れを補正してSlackユーザーIDだけを取り出す */
-function normalizeSlackUserId_(value) {
-  return String(value || '').trim().replace(/^<@/, '').replace(/>$/, '').replace(/^@/, '');
 }
 
 /** SlackユーザーIDとして妥当な形式かどうか（U/W始まりの英数字） */
