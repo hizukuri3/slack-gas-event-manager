@@ -101,8 +101,8 @@ clone したディレクトリで、GASプロジェクトと橋渡しする clas
 各ファイルの役割は [README のリポジトリ構成](../README.md#リポジトリ構成) を参照してください。ポイント:
 
 - `Config.gs` … スクリプトプロパティの読み込みと定数（`FORM_TITLES`・列定義など）。設定値の入口はここに集約。
-- `Bootstrap.gs` … 新インスタンスの初期構築（スプシ・フォーム・カレンダー生成）。フォームの設問定義 `FORM_SPEC` を持つ。
-- `FormHandler.gs` … フォーム送信の処理本体。設問タイトルで回答を照合するため、`FORM_TITLES` / `FORM_SPEC` と設問名の一致が要。
+- `Bootstrap.gs` … 新インスタンスの初期構築（スプシ・フォーム・カレンダー生成）。フォームの設問定義 `formSpec_()` を持つ。
+- `FormHandler.gs` … フォーム送信の処理本体。設問タイトルで回答を照合するため、`FORM_TITLES` / `formSpec_()` と設問名の一致が要。
 - `InteractionHandler.gs` … Slackボタン押下の処理（予約・キャンセル・定員・繰り上げ）。
 - `Repository.gs` … スプレッドシート読み書き（管理用・公開用のミラーリング）。
 

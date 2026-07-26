@@ -22,20 +22,25 @@
 // 設問タイトルは FORM_TITLES を流用し、Config.gs と一致させる。
 // ヘルプ文（FORMAT / LOCATION）はここには持たせない。applyFormHints_()（FormHandler.gs）
 // が正となり、setupTriggers() 実行時に付与される（二重管理によるドリフトを防ぐ）。
-const FORM_SPEC = [
-  { title: FORM_TITLES.TITLE, type: 'TEXT', required: true },
-  { title: FORM_TITLES.ORGANIZER, type: 'TEXT', required: true },
-  { title: FORM_TITLES.START, type: 'DATETIME', required: true },
-  { title: FORM_TITLES.END_TIME, type: 'TIME', required: true },
-  { title: FORM_TITLES.CAPACITY, type: 'TEXT', required: true },
-  { title: FORM_TITLES.STATUS, type: 'MULTIPLE_CHOICE', required: true,
-    choices: ['開催', '中止'] },
-  { title: FORM_TITLES.FORMAT, type: 'MULTIPLE_CHOICE', required: true,
-    choices: ['①オンライン・自動発行', '②オンライン・手動URL', '③オフライン・対面'] },
-  { title: FORM_TITLES.LOCATION, type: 'TEXT', required: false },
-  { title: FORM_TITLES.DESCRIPTION, type: 'PARAGRAPH_TEXT', required: true },
-  { title: FORM_TITLES.PREPARATION, type: 'PARAGRAPH_TEXT', required: false }
-];
+// 定数ではなく関数にしているのは、GASがファイル名の昇順でトップレベルを評価するため。
+// Bootstrap.gs は Config.gs より先に読まれるので、トップレベルの const で FORM_TITLES を
+// 参照すると「ReferenceError: FORM_TITLES is not defined」になる。関数にして参照を実行時へ遅らせる。
+function formSpec_() {
+  return [
+    { title: FORM_TITLES.TITLE, type: 'TEXT', required: true },
+    { title: FORM_TITLES.ORGANIZER, type: 'TEXT', required: true },
+    { title: FORM_TITLES.START, type: 'DATETIME', required: true },
+    { title: FORM_TITLES.END_TIME, type: 'TIME', required: true },
+    { title: FORM_TITLES.CAPACITY, type: 'TEXT', required: true },
+    { title: FORM_TITLES.STATUS, type: 'MULTIPLE_CHOICE', required: true,
+      choices: ['開催', '中止'] },
+    { title: FORM_TITLES.FORMAT, type: 'MULTIPLE_CHOICE', required: true,
+      choices: ['①オンライン・自動発行', '②オンライン・手動URL', '③オフライン・対面'] },
+    { title: FORM_TITLES.LOCATION, type: 'TEXT', required: false },
+    { title: FORM_TITLES.DESCRIPTION, type: 'PARAGRAPH_TEXT', required: true },
+    { title: FORM_TITLES.PREPARATION, type: 'PARAGRAPH_TEXT', required: false }
+  ];
+}
 
 /**
  * 新しい期の初期構築（手動実行）。
@@ -134,7 +139,7 @@ function createSpreadsheet_(name) {
   return SpreadsheetApp.create(name).getId();
 }
 
-/** イベント登録フォームを FORM_SPEC どおりに新規作成してIDを返す（マイドライブ直下にできる） */
+/** イベント登録フォームを formSpec_() どおりに新規作成してIDを返す（マイドライブ直下にできる） */
 function createEventForm_(name) {
   const form = FormApp.create(name);
   buildFormItems_(form);
@@ -162,9 +167,9 @@ function calendarSettingsUrl_(id) {
     encodeURIComponent(Utilities.base64Encode(id));
 }
 
-/** FORM_SPEC に従ってフォームへ設問を追加する（順序も定義どおり） */
+/** formSpec_() に従ってフォームへ設問を追加する（順序も定義どおり） */
 function buildFormItems_(form) {
-  FORM_SPEC.forEach(function (spec) {
+  formSpec_().forEach(function (spec) {
     let item;
     switch (spec.type) {
       case 'TEXT':
