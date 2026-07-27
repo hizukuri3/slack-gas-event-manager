@@ -23,6 +23,100 @@ function getOrCreateSheet_(spreadsheet, name, header) {
   return sheet;
 }
 
+/**
+ * 人が編集するシートの「有効」列に、見出しとドロップダウンを設定する。
+ * 「絵文字転送マッピング」と「師匠リスト」で共通の処理。
+ *
+ * ★ データ行のセルには一切書き込まない ★
+ * 空欄が有効を意味することは見出しで伝える。空欄へ「有効」と書き込めば
+ * 見た目は分かりやすくなるが、人が書くシートにシステムが値を入れることになり、
+ * 自分が書いていない文字がシートに現れる。ヘッダー行はもともと
+ * getOrCreateSheet_ が作る行なので、そこで伝えるぶんには筋が通る。
+ *
+ * チェックボックスにしないのは、空欄と「オフ」を見た目で区別できず、
+ * 行のコピーで意図せず外れる余地もあるため。
+ *
+ * @param {Sheet} sheet 対象シート
+ * @param {number} enabledColumn 「有効」列（0始まり）
+ */
+function setupEnabledColumn_(sheet, enabledColumn) {
+  // 見出しが書かれるのは getOrCreateSheet_ のシート作成時だけなので、
+  // 文言を変えても既存シートには反映されない。ここで追随させる
+  const headerCell = sheet.getRange(1, enabledColumn + 1);
+  if (headerCell.getValue() !== ENABLED_HEADER) headerCell.setValue(ENABLED_HEADER);
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  // 候補以外の入力を弾く（「休止」「オフ」等と書いて止めたつもりになるのを防ぐ）。
+  // ただし貼り付けは入力規則ごとセルを上書きするため、これだけでは防ぎきれない。
+  // すり抜けた値は classifyEnabledFlag_ が判定不能として拾い、運営へ知らせる。
+  // 同期のたびにここで貼り直すので、消された入力規則は次の編集で自動的に戻る。
+  //
+  // 検証範囲を1行だけ余分に広げているのは、新しく足す行にも最初から
+  // ドロップダウンを効かせるため。行が増えてから設定したのでは、
+  // その行の「有効」欄へ先に手入力されたときに素通りしてしまう
+  sheet.getRange(2, enabledColumn + 1, lastRow, 1).setDataValidation(
+    SpreadsheetApp.newDataValidation()
+      .requireValueInList(ENABLED_CHOICES, true)
+      .setAllowInvalid(false)
+      .build()
+  );
+}
+
+// ==================== 管理用スプレッドシートのトリガー ====================
+// 人が管理用①を編集したときの入口。GAS自身の書き込みでは発火しないため、
+// 参加者リストなどへのシステム更新でここが呼ばれることはない。
+
+/**
+ * 編集トリガー（setupTriggers で登録）：セルの値の変更を拾う。
+ * 入力・貼り付け・クリア・元に戻す が該当する。
+ */
+function onManagementSpreadsheetEdit(e) {
+  if (!e || !e.range) return;
+  const name = e.range.getSheet().getName();
+
+  if (name === SHEET_MASTER_LIST) {
+    // 師匠リストは編集内容をスクリプトプロパティへ反映する必要がある
+    notifyMasterListSync_(e.source, syncMasterList());
+    return;
+  }
+  if (name === SHEET_RELAY_MAPPING) {
+    // 転送マッピングはリアクションの都度シートを直接読むので反映処理は不要。
+    // 入力規則だけ師匠リストと揃える（トーストは出さない。
+    // 反映結果という報せるべき中身が無く、毎回出しても雑音にしかならないため）
+    setupEnabledColumn_(e.range.getSheet(), RELAY_COL.ENABLED);
+  }
+}
+
+/**
+ * 変更トリガー（setupTriggers で登録）：行・シートの削除を拾う。
+ *
+ * onEdit は「セルの値の変更」でしか発火しないため、行を削除しても動かない。
+ * 師匠を外すのに行ごと削除するのは自然な操作なので、これが無いと
+ * 「消したのに効かない」（しかもトーストも出ない）という一番たちの悪い形になる。
+ * シートごと削除された場合も、ここで検知して反映を中止する。
+ *
+ * 対象は師匠リストだけ。転送マッピングは行が消えればルールが消えるだけで、
+ * 別に持っている状態が無いので追随の必要がない。
+ *
+ * onChange はどのシートが変わったかを教えてくれないため、行削除については
+ * 操作した本人が開いているシートで判定する。シート削除（REMOVE_GRID）は
+ * 削除後に別のシートが開かれるので、その判定はできず常に同期を試みる。
+ */
+function onManagementSpreadsheetChange(e) {
+  if (!e || !e.source) return;
+  const type = e.changeType;
+
+  if (type === 'REMOVE_ROW') {
+    const active = e.source.getActiveSheet();
+    if (!active || active.getName() !== SHEET_MASTER_LIST) return;
+  } else if (type !== 'REMOVE_GRID') {
+    return;
+  }
+  notifyMasterListSync_(e.source, syncMasterList());
+}
+
 /** 初回セットアップ：必要なシートを作成する（手動実行用） */
 function initializeSheets() {
   const config = getConfig_();
@@ -34,9 +128,14 @@ function initializeSheets() {
   // 次の3シートは管理用①にのみ作る。
   // イベントの参加状況とは無関係な運用設定・内部ログなので公開用②へは出さない。
   const management = SpreadsheetApp.openById(config.managementSpreadsheetId);
-  getOrCreateSheet_(management, SHEET_RELAY_MAPPING, RELAY_MAPPING_HEADER);
+  const relayMapping = getOrCreateSheet_(management, SHEET_RELAY_MAPPING, RELAY_MAPPING_HEADER);
   getOrCreateSheet_(management, SHEET_RELAY_LOG, RELAY_LOG_HEADER);
   getOrCreateSheet_(management, SHEET_MASTER_LIST, MASTER_LIST_HEADER);
+
+  // 転送マッピングは編集トリガー経由でしか整えられないため、ここで一度通しておく。
+  // でないと、誰かがそのシートを編集するまで見出しもドロップダウンも入らない
+  // （師匠リストは、この直後に呼ばれる syncMasterList が受け持つ）
+  setupEnabledColumn_(relayMapping, RELAY_COL.ENABLED);
 }
 
 // ==================== イベントマスター ====================
