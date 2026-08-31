@@ -34,8 +34,10 @@ function formSpec_() {
     { title: FORM_TITLES.CAPACITY, type: 'TEXT', required: true },
     { title: FORM_TITLES.STATUS, type: 'MULTIPLE_CHOICE', required: true,
       choices: ['開催', '中止'] },
+    // 選択肢の正は Config.gs の EVENT_FORMAT_VALUES。ここで文字列を直書きすると
+    // applyFormHints_ が既存フォームへ反映する内容とずれる
     { title: FORM_TITLES.FORMAT, type: 'MULTIPLE_CHOICE', required: true,
-      choices: ['①オンライン・自動発行', '②オンライン・手動URL', '③オフライン・対面'] },
+      choices: EVENT_FORMAT_VALUES },
     { title: FORM_TITLES.LOCATION, type: 'TEXT', required: false },
     { title: FORM_TITLES.DESCRIPTION, type: 'PARAGRAPH_TEXT', required: true },
     { title: FORM_TITLES.PREPARATION, type: 'PARAGRAPH_TEXT', required: false }

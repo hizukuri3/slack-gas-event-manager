@@ -51,29 +51,49 @@ function setupTriggers() {
 }
 
 /**
- * フォームの設問に入力ヒント（説明文）を自動設定する。
- * 特に無料版Meetの60分制限と予定分割の挙動を、入力時点で主催者に伝える。
+ * フォームの設問に入力ヒント（説明文）と選択肢を反映する。
+ *
+ * 選択肢まで面倒を見るのは、開催形式が「コードが正」で、フォームはその写しに
+ * すぎないため。buildFormItems_（Bootstrap.gs）はフォームを新規作成したときにしか
+ * 走らないので、そちらだけを直してもすでに動いているインスタンスには永久に
+ * 反映されない。ここを通しておけば setupTriggers() の実行で既存フォームも追随する。
  */
 function applyFormHints_(formId) {
   const form = FormApp.openById(formId);
   form.getItems().forEach(function (item) {
     const title = item.getTitle();
+
     if (title === FORM_TITLES.FORMAT) {
+      setChoicesIfMultipleChoice_(item, EVENT_FORMAT_VALUES);
+      // ラベルを短くしたぶん、選択肢の意味はすべてここで説明する
       item.setHelpText(
-        '①オンライン・自動発行は無料版Google Meetを使用します。' +
-        '3人以上の通話は60分で自動切断されるため、60分を超えるイベントは' +
-        'カレンダー予定が60分ごとに自動分割されます（各回で別々のMeet URLを発行。' +
-        '切れても次の回のURLへ待ち時間なしで入室可能）。切断なしで開催したい場合は' +
-        '②を選び、時間制限のないツールのURLを入力してください。'
+        '「' + EVENT_FORMATS.MEET + '」… URLを自動発行します。無料版のため3人以上の通話は' +
+        '60分で自動切断され、60分を超えるイベントはカレンダー予定が60分ごとに自動分割されます' +
+        '（各回で別々のURLを発行。切れても次の回へ待ち時間なしで入室可能）。\n' +
+        '「' + EVENT_FORMATS.MANUAL_URL + '」「' + EVENT_FORMATS.OFFLINE + '」… 下の「' +
+        FORM_TITLES.LOCATION + '」の入力が必要です。'
       );
     }
+
     if (title === FORM_TITLES.LOCATION) {
       item.setHelpText(
-        '開催形式が「②オンライン・手動URL」「③オフライン・対面」の場合は必須です。' +
-        '「①オンライン・自動発行」の場合は空欄のままにしてください（Meet URLが自動で入ります）。'
+        '開催形式が「' + EVENT_FORMATS.MANUAL_URL + '」「' + EVENT_FORMATS.OFFLINE +
+        '」の場合は必須です。\n' +
+        '「' + EVENT_FORMATS.MEET + '」の場合は空欄のままにしてください' +
+        '（Meet URLが自動で入ります）。'
       );
     }
   });
+}
+
+/**
+ * 選択式の設問なら選択肢を差し替える。
+ * 型を確かめてから触るのは、設問を作り直して型が変わっていた場合に
+ * asMultipleChoiceItem() が例外を投げ、ヒント付与ごと止まってしまうため。
+ */
+function setChoicesIfMultipleChoice_(item, choices) {
+  if (item.getType() !== FormApp.ItemType.MULTIPLE_CHOICE) return;
+  item.asMultipleChoiceItem().setChoiceValues(choices);
 }
 
 /** フォーム送信時のメイン処理（新規登録と回答編集の両方が飛んでくる） */
@@ -138,7 +158,8 @@ function extractAnswers_(formResponse) {
     end: end,
     capacity: Number(map[FORM_TITLES.CAPACITY]),
     status: String(map[FORM_TITLES.STATUS] || ''),
-    format: String(map[FORM_TITLES.FORMAT] || ''),
+    // 判定は EVENT_FORMATS との完全一致なので、入り口で前後の空白を落としておく
+    format: String(map[FORM_TITLES.FORMAT] || '').trim(),
     location: String(map[FORM_TITLES.LOCATION] || '').trim(),
     description: String(map[FORM_TITLES.DESCRIPTION] || ''),
     preparation: String(map[FORM_TITLES.PREPARATION] || '')
@@ -190,9 +211,16 @@ function validateAnswers_(answers, existing) {
   if (!Number.isInteger(answers.capacity) || answers.capacity < 1) {
     errors.push('定員は1以上の整数で入力してください。');
   }
-  if (!isAutoMeet_(answers.format) && !answers.location) {
-    errors.push('開催形式が「②オンライン・手動URL」「③オフライン・対面」の場合、' +
-      '「会場URL または 開催場所」の入力は必須です。');
+  // 開催形式は選択肢のどれかでなければならない。一致しない値が届くのは、フォームの
+  // 選択肢が手で書き換えられたときで、放っておくと「会場URLが要る形式」として静かに
+  // 扱われる。ここで弾いておけば、運営がその場で気づける
+  if (EVENT_FORMAT_VALUES.indexOf(answers.format) === -1) {
+    errors.push('開催形式「' + answers.format + '」は選択肢にありません。' +
+      'フォームの選択肢が書き換えられた可能性があります。運営にお問い合わせください。');
+  } else if (!isAutoMeet_(answers.format) && !answers.location) {
+    // Meet自動発行は、会場URLをシステムが埋めるので入力を求めない
+    errors.push('開催形式が「' + EVENT_FORMATS.MANUAL_URL + '」「' + EVENT_FORMATS.OFFLINE +
+      '」の場合、「' + FORM_TITLES.LOCATION + '」の入力は必須です。');
   }
   return errors;
 }
