@@ -38,6 +38,11 @@ function formSpec_() {
     // applyFormHints_ が既存フォームへ反映する内容とずれる
     { title: FORM_TITLES.FORMAT, type: 'MULTIPLE_CHOICE', required: true,
       choices: EVENT_FORMAT_VALUES },
+    // VC部屋の選択肢はVCルームリスト（管理用①）が正で、シート編集のたびに
+    // syncVcRoomChoices() が貼り直す。ここではフォーム作成直後に選べる
+    // 「おまかせ」だけを置いておく（空の選択肢はFormAppが受け付けないため）
+    { title: FORM_TITLES.VC_ROOM, type: 'MULTIPLE_CHOICE', required: false,
+      choices: [VC_ROOM_AUTO] },
     { title: FORM_TITLES.LOCATION, type: 'TEXT', required: false },
     { title: FORM_TITLES.DESCRIPTION, type: 'PARAGRAPH_TEXT', required: true },
     { title: FORM_TITLES.PREPARATION, type: 'PARAGRAPH_TEXT', required: false }

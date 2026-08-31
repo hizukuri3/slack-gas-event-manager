@@ -24,6 +24,25 @@ function getOrCreateSheet_(spreadsheet, name, header) {
 }
 
 /**
+ * 既存シートの見出し行を定義に合わせ直す。
+ *
+ * getOrCreateSheet_ が見出しを書くのはシートを新規作成したときだけなので、
+ * 列を追加してもすでに動いているインスタンスには反映されない。データは
+ * 列番号で読み書きしていて支障なく動いてしまうぶん、見出しだけが古いまま
+ * 残り、シートを開いた人が「この列は何か」を判断できなくなる。
+ * setupEnabledColumn_ が「有効」列の見出しで同じ手当てをしているのと同じ趣旨。
+ *
+ * 対象はシステムが書くシートに限る。人が編集するシートで勝手に見出しを
+ * 戻すと、運営が意図して直した文言を上書きしてしまう。
+ */
+function ensureHeader_(sheet, header) {
+  const current = sheet.getRange(1, 1, 1, header.length).getValues()[0];
+  const matches = header.every(function (label, i) { return current[i] === label; });
+  if (matches) return;
+  sheet.getRange(1, 1, 1, header.length).setValues([header]);
+}
+
+/**
  * 人が編集するシートの「有効」列に、見出しとドロップダウンを設定する。
  * 「絵文字転送マッピング」と「師匠リスト」で共通の処理。
  *
@@ -86,6 +105,14 @@ function onManagementSpreadsheetEdit(e) {
     // 入力規則だけ師匠リストと揃える（トーストは出さない。
     // 反映結果という報せるべき中身が無く、毎回出しても雑音にしかならないため）
     setupEnabledColumn_(e.range.getSheet(), RELAY_COL.ENABLED);
+    return;
+  }
+  if (name === SHEET_VC_ROOMS) {
+    // 部屋の在庫は割り当てのたびに読み直すので、プロパティへの反映は不要。
+    // ただしフォームの「VC部屋」の選択肢はこのシートが正なので、ここで追随させる。
+    // 部屋を1行足したらフォームでも選べるようになる、を成立させるための処理
+    setupEnabledColumn_(e.range.getSheet(), VC_ROOM_COL.ENABLED);
+    notifyVcRoomSync_(e.source, syncVcRoomChoices());
   }
 }
 
@@ -97,12 +124,14 @@ function onManagementSpreadsheetEdit(e) {
  * 「消したのに効かない」（しかもトーストも出ない）という一番たちの悪い形になる。
  * シートごと削除された場合も、ここで検知して反映を中止する。
  *
- * 対象は師匠リストだけ。転送マッピングは行が消えればルールが消えるだけで、
- * 別に持っている状態が無いので追随の必要がない。
+ * 対象は師匠リストとVCルームリスト。どちらも「シートの外に持っている状態」
+ * （スクリプトプロパティ / フォームの選択肢）があるため、行が消えたら
+ * そちらも追随させないと辻褄が合わなくなる。転送マッピングは行が消えれば
+ * ルールが消えるだけで、別に持っている状態が無いので追随の必要がない。
  *
  * onChange はどのシートが変わったかを教えてくれないため、行削除については
  * 操作した本人が開いているシートで判定する。シート削除（REMOVE_GRID）は
- * 削除後に別のシートが開かれるので、その判定はできず常に同期を試みる。
+ * 削除後に別のシートが開かれるので、その判定はできず両方の同期を試みる。
  */
 function onManagementSpreadsheetChange(e) {
   if (!e || !e.source) return;
@@ -110,32 +139,46 @@ function onManagementSpreadsheetChange(e) {
 
   if (type === 'REMOVE_ROW') {
     const active = e.source.getActiveSheet();
-    if (!active || active.getName() !== SHEET_MASTER_LIST) return;
-  } else if (type !== 'REMOVE_GRID') {
+    const name = active ? active.getName() : '';
+    if (name === SHEET_MASTER_LIST) {
+      notifyMasterListSync_(e.source, syncMasterList());
+    } else if (name === SHEET_VC_ROOMS) {
+      notifyVcRoomSync_(e.source, syncVcRoomChoices());
+    }
     return;
   }
+  if (type !== 'REMOVE_GRID') return;
   notifyMasterListSync_(e.source, syncMasterList());
+  notifyVcRoomSync_(e.source, syncVcRoomChoices());
 }
 
 /** 初回セットアップ：必要なシートを作成する（手動実行用） */
 function initializeSheets() {
   const config = getConfig_();
   openSpreadsheets_(config).forEach(function (ss) {
-    getOrCreateSheet_(ss, SHEET_EVENT_MASTER, EVENT_MASTER_HEADER);
-    getOrCreateSheet_(ss, SHEET_PARTICIPANTS, PARTICIPANTS_HEADER);
+    // システムが書くシートなので、列が増えたときは見出しも追随させる
+    ensureHeader_(getOrCreateSheet_(ss, SHEET_EVENT_MASTER, EVENT_MASTER_HEADER),
+      EVENT_MASTER_HEADER);
+    ensureHeader_(getOrCreateSheet_(ss, SHEET_PARTICIPANTS, PARTICIPANTS_HEADER),
+      PARTICIPANTS_HEADER);
   });
 
-  // 次の3シートは管理用①にのみ作る。
+  // 次の4シートは管理用①にのみ作る。
   // イベントの参加状況とは無関係な運用設定・内部ログなので公開用②へは出さない。
   const management = SpreadsheetApp.openById(config.managementSpreadsheetId);
   const relayMapping = getOrCreateSheet_(management, SHEET_RELAY_MAPPING, RELAY_MAPPING_HEADER);
   getOrCreateSheet_(management, SHEET_RELAY_LOG, RELAY_LOG_HEADER);
   getOrCreateSheet_(management, SHEET_MASTER_LIST, MASTER_LIST_HEADER);
+  // Discord VCの在庫台帳。空のままでも他の機能には影響しない
+  // （開催形式でDiscord VCを選んだときだけ参照される）
+  const vcRooms = getOrCreateSheet_(management, SHEET_VC_ROOMS, VC_ROOM_HEADER);
 
-  // 転送マッピングは編集トリガー経由でしか整えられないため、ここで一度通しておく。
-  // でないと、誰かがそのシートを編集するまで見出しもドロップダウンも入らない
+  // 「有効」列を持つ人編集シートは、編集トリガー経由でしか整えられないため
+  // ここで一度通しておく。でないと、誰かがそのシートを編集するまで
+  // 見出しもドロップダウンも入らない
   // （師匠リストは、この直後に呼ばれる syncMasterList が受け持つ）
   setupEnabledColumn_(relayMapping, RELAY_COL.ENABLED);
+  setupEnabledColumn_(vcRooms, VC_ROOM_COL.ENABLED);
 }
 
 // ==================== イベントマスター ====================
@@ -165,6 +208,7 @@ function eventToRow_(ev) {
   row[COL.CREATED_AT] = ev.createdAt;
   row[COL.UPDATED_AT] = ev.updatedAt;
   row[COL.TYPE] = ev.type || EVENT_TYPE.DISCIPLE;
+  row[COL.VC_ROOM] = ev.vcRoom || '';
   return row;
 }
 
@@ -189,7 +233,10 @@ function rowToEvent_(row) {
     editUrl: row[COL.EDIT_URL],
     createdAt: row[COL.CREATED_AT],
     updatedAt: row[COL.UPDATED_AT],
-    type: row[COL.TYPE] || EVENT_TYPE.DISCIPLE
+    type: row[COL.TYPE] || EVENT_TYPE.DISCIPLE,
+    // VCルーム列を持たない時代の行は undefined になるので空文字へ倒す。
+    // ここを省くと vcRoomsInUse_ の判定で undefined が紛れ込む
+    vcRoom: String(row[COL.VC_ROOM] || '')
   };
 }
 
@@ -250,6 +297,24 @@ function findEvent_(config, predicate) {
     if (predicate(ev)) return ev;
   }
   return null;
+}
+
+/**
+ * 条件に一致するイベントを全件返す。
+ * VC部屋の被り判定のように「最初の1件」では足りない用途で使う
+ * （同じ時間帯に何部屋押さえられているかを知る必要があるため）。
+ */
+function filterEvents_(config, predicate) {
+  const sheet = SpreadsheetApp.openById(config.managementSpreadsheetId)
+    .getSheetByName(SHEET_EVENT_MASTER);
+  if (!sheet) return [];
+  const values = sheet.getDataRange().getValues();
+  const found = [];
+  for (let i = 1; i < values.length; i++) {
+    const ev = rowToEvent_(values[i]);
+    if (predicate(ev)) found.push(ev);
+  }
+  return found;
 }
 
 /** フォーム回答IDでイベントを検索（回答編集の照合に使用） */

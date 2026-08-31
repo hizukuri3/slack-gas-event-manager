@@ -14,6 +14,8 @@ const SHEET_RELAY_MAPPING = '絵文字転送マッピング';
 const SHEET_RELAY_LOG = '絵文字転送ログ';
 // 師匠リスト。管理用①にのみ作り、公開用②へは同期しない（運用設定のため）
 const SHEET_MASTER_LIST = '師匠リスト';
+// Discord VCの在庫台帳。管理用①にのみ作る（運用設定のため）
+const SHEET_VC_ROOMS = 'VCルームリスト';
 
 // 人が編集するシートの「有効」列の見出し。
 // 空欄が有効を意味することを、シートを開いた人の目に入る場所で伝えるための文言。
@@ -60,14 +62,18 @@ const COL = {
   EDIT_URL: 15,       // フォーム回答編集用URL
   CREATED_AT: 16,     // 登録日時
   UPDATED_AT: 17,     // 更新日時
-  TYPE: 18            // 種別（師匠 / 弟子）
+  TYPE: 18,           // 種別（師匠 / 弟子）
+  // Discord VC開催時に確保した部屋名。LOCATION（URL）とは別に持つ。
+  // URL文字列を解析して部屋を割り出すのは脆いので、被り判定はこの列だけを見る。
+  // 末尾に足しているのは、既存インスタンスの列番号をずらさないため
+  VC_ROOM: 19
 };
 
 const EVENT_MASTER_HEADER = [
   'イベントID', '回答ID', 'イベント名', '主催者SlackユーザーID', '開始日時', '終了日時',
   '定員', 'ステータス', '開催形式', '会場URL/開催場所', '概要・対象者', '事前準備・持ち物',
   'カレンダーイベントID', 'SlackチャンネルID', 'SlackメッセージTS', '回答編集用URL',
-  '登録日時', '更新日時', '種別'
+  '登録日時', '更新日時', '種別', 'VCルーム'
 ];
 
 const PARTICIPANTS_HEADER = ['イベントID', 'SlackユーザーID', '表示名', '状態', '登録日時'];
@@ -116,6 +122,35 @@ const MASTER_LIST_COL = {
 
 const MASTER_LIST_HEADER = ['SlackユーザーID', '表示名', ENABLED_HEADER, 'メモ'];
 
+// ---- VCルームリストの列定義（0始まり）----
+// 人が編集するシート。Discordに部屋を作って、ここに1行足すと予約できるようになる。
+// ★ 行の並び順が優先順位そのもの ★
+// 「おまかせ」の自動割り当ては上から順に空きを探すので、大きい部屋ほど下に置く。
+// そうすると小さいイベントに大部屋を取られず、大部屋は最後の砦として残る。
+//
+// ★ 一時VC（Join-to-Create）とそのハブは絶対に登録しないこと ★
+// ハブを登録すると、参加者が入った瞬間に全員バラバラの一時VCへ飛ばされる。
+const VC_ROOM_COL = {
+  NAME: 0,      // VC名（告知・カレンダーに出る表示名）
+  URL: 1,       // チャンネルURL（https://discord.com/channels/{サーバーID}/{チャンネルID}）
+  // 収容人数の目安。Discord側で人数制限をかけない運用なので実際の壁ではないが、
+  // 「イベント定員を収容できる部屋」を選ぶための絞り込みに使う。
+  // どの部屋でも収まらない定員が入力された場合は、その場で差し戻す番人にもなる
+  CAPACITY: 2,
+  // 所有者SlackユーザーID（任意）。埋まっている部屋はおまかせの在庫から外れ、
+  // 本人が主催するときだけ自動で割り当てられる。
+  // ★ 所有者が守るのは「おまかせ」だけ ★ 名指しは所有者を見ないので、
+  // 他の人でもこの部屋を指名して予約できる（師匠の部屋を弟子が借りる運用を
+  // 残すため、意図してそうしている）
+  OWNER: 3,
+  ENABLED: 4,   // 有効（ドロップダウン。空欄も有効。「無効」で一時的に外す）
+  NOTE: 5       // メモ（処理には使わない）
+};
+
+const VC_ROOM_HEADER = [
+  'VC名', 'チャンネルURL', '定員（目安）', '所有者SlackユーザーID（任意）', ENABLED_HEADER, 'メモ'
+];
+
 // 「有効」列のドロップダウンの選択肢。先頭が既定値（空欄と同じ意味）。
 // 「絵文字転送マッピング」「師匠リスト」の両方で共通して使う
 const ENABLED_CHOICES = ['有効', '無効'];
@@ -136,6 +171,7 @@ const FORM_TITLES = {
   CAPACITY: '定員',
   STATUS: 'イベントのステータス',
   FORMAT: '開催形式',
+  VC_ROOM: 'VC部屋',
   LOCATION: '会場URL または 開催場所',
   DESCRIPTION: '概要・対象者',
   PREPARATION: '事前準備・持ち物・資料リンク'
@@ -143,8 +179,8 @@ const FORM_TITLES = {
 
 // ---- 開催形式の選択肢 ----
 // ここの値がフォームの選択肢そのものであり、イベントマスターに保存される値でもある。
-// 判定（isAutoMeet_）はこの値との完全一致で行う。どれとも一致しない値は
-// validateAnswers_ が差し戻すので、フォームの選択肢を手で書き換えたときに
+// 判定（isAutoMeet_ / isDiscordVc_）はこの値との完全一致で行う。どれとも一致しない
+// 値は validateAnswers_ が差し戻すので、フォームの選択肢を手で書き換えたときに
 // 静かに挙動が変わるのではなく、その場で気づける。
 //
 // ★ ラベルに番号を振らないこと ★
@@ -157,6 +193,7 @@ const FORM_TITLES = {
 // 「60分ごとに分割される」といった説明は applyFormHints_ のヘルプ文が持つ。
 // ヘルプ文は判定に使われないため、いくら書き換えても壊れない。
 const EVENT_FORMATS = {
+  DISCORD: 'Discord VC',
   MEET: 'Google Meet',
   MANUAL_URL: 'その他のURL',
   OFFLINE: '対面（オフライン）'
@@ -164,8 +201,18 @@ const EVENT_FORMATS = {
 
 // フォームに並べる順序。妥当性チェックの一覧も兼ねる（単一の真実）
 const EVENT_FORMAT_VALUES = [
-  EVENT_FORMATS.MEET, EVENT_FORMATS.MANUAL_URL, EVENT_FORMATS.OFFLINE
+  EVENT_FORMATS.DISCORD, EVENT_FORMATS.MEET,
+  EVENT_FORMATS.MANUAL_URL, EVENT_FORMATS.OFFLINE
 ];
+
+// 「VC部屋」設問の先頭の選択肢。これを選ぶと自動割り当てになる。
+// 空欄を自動の合図にせず明示の選択肢にしているのは、迷ったらこれを選べば
+// 確保漏れが起きないという既定の道を、選択肢の先頭に見せるため。
+//
+// 設問そのものは任意にしてある。Googleフォームに条件付き必須が無いため、
+// 必須にすると Discord VC 以外を選ぶ主催者にまで回答を強いることになる。
+// 未回答は assignVcRoom_ が「おまかせ」と同じ扱いにする。
+const VC_ROOM_AUTO = 'おまかせ（自動割り当て）';
 
 /**
  * スクリプトプロパティを読み込んで返す。
