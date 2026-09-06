@@ -33,19 +33,17 @@ function setupTriggers() {
     .onChange()
     .create();
   // 弟子用・師匠用（設定されていれば）の両フォームにトリガーを登録
-  const formIds = [config.formId];
-  if (config.masterFormId && config.masterFormId !== config.formId) {
-    formIds.push(config.masterFormId);
-  }
-  formIds.forEach(function (formId) {
+  formIds_(config).forEach(function (formId) {
     ScriptApp.newTrigger('onFormSubmit')
       .forForm(formId)
       .onFormSubmit()
       .create();
   });
   initializeSheets();
-  // ヒントと選択肢の反映は initializeSheets() の後に回す。
-  // VC部屋の選択肢はVCルームリストが正なので、シートが出来ていないと空になる
+  // 設問の追加 → 選択肢・ヒントの反映、の順で通す。initializeSheets() の後に
+  // 回すのは、VC部屋の選択肢はVCルームリストが正で、シートが出来ていないと
+  // 空になるため
+  syncFormItems();
   syncVcRoomChoices();
   // 師匠リストシートの内容をプロパティへ反映する。
   // プロパティで師匠を管理していた既存インスタンスは、ここで初回移行が走る
@@ -125,15 +123,11 @@ function setChoicesIfMultipleChoice_(item, choices) {
 function syncVcRoomChoices() {
   const config = getConfig_();
   const choices = vcRoomChoiceValues_(config);
-  const formIds = [config.formId];
-  if (config.masterFormId && config.masterFormId !== config.formId) {
-    formIds.push(config.masterFormId);
-  }
+  const formIds = formIds_(config);
 
   let formCount = 0;
   let failed = 0;
   formIds.forEach(function (formId) {
-    if (!formId) return;
     try {
       applyFormHints_(formId, choices);
       formCount++;
@@ -144,7 +138,55 @@ function syncVcRoomChoices() {
     }
   });
   // 先頭の「おまかせ」は部屋ではないので数から外す
-  return { roomCount: choices.length - 1, formCount: formCount, failed: failed };
+  const result = { roomCount: choices.length - 1, formCount: formCount, failed: failed };
+  // 師匠リストと同じく実行ログにも残す。シート編集トリガーからはトーストが出るが、
+  // setupTriggers() から呼ばれたときは何も出ず、反映されたのか分からなくなるため
+  console.log('使えるVC部屋をフォームへ反映しました: ' + result.roomCount + '件' +
+    '（対象フォーム' + result.formCount + '件）');
+  return result;
+}
+
+/**
+ * コード側の設問定義（formSpec_）にまだ追いついていない設問を、両フォームへ追加する。
+ * 既存の設問には触れないので、何度実行しても増えるのは足りない設問だけ。
+ *
+ * 稼働中のインスタンスで設問を増やしたときの唯一の追随経路。フォームを作り直すと
+ * 主催者が持っている回答編集URLがすべて無効になるため、作り直しは避けたい。
+ *
+ * @return {{added: string[], formCount: number, failed: number}}
+ */
+function syncFormItems() {
+  const config = getConfig_();
+  const added = [];
+  let formCount = 0;
+  let failed = 0;
+
+  formIds_(config).forEach(function (formId) {
+    try {
+      ensureFormItems_(FormApp.openById(formId)).forEach(function (title) {
+        if (added.indexOf(title) === -1) added.push(title);
+      });
+      formCount++;
+    } catch (err) {
+      // 片方のフォームが壊れていても、もう片方の追随は続ける
+      failed++;
+      console.warn('設問を追加できませんでした (' + formId + '): ' + err);
+    }
+  });
+
+  console.log(added.length > 0
+    ? 'フォームへ設問を追加しました: ' + added.join(' / ') + '（対象フォーム' + formCount + '件）'
+    : 'フォームの設問は定義どおりです（対象フォーム' + formCount + '件）');
+  return { added: added, formCount: formCount, failed: failed };
+}
+
+/** 弟子用・師匠用（設定されていれば）のフォームIDを返す */
+function formIds_(config) {
+  const ids = [config.formId];
+  if (config.masterFormId && config.masterFormId !== config.formId) {
+    ids.push(config.masterFormId);
+  }
+  return ids.filter(function (id) { return Boolean(id); });
 }
 
 /** VC部屋の同期結果を、操作した人へトーストで知らせる（師匠リストと同じ流儀） */
