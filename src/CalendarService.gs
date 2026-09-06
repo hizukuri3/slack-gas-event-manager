@@ -1,7 +1,7 @@
 /**
  * CalendarService.gs
  * Googleカレンダー連携（Calendar API 拡張サービス使用）。
- * 開催形式「オンライン・自動発行」の場合は conferenceData で Google Meet URL を自動生成する。
+ * 開催形式「Google Meet」の場合は conferenceData で Google Meet URL を自動生成する。
  *
  * 無料版Google Meetは3人以上の通話が60分で自動切断されるため、
  * 自動発行かつ60分超のイベントはカレンダー予定を60分ごとに分割登録する。
@@ -13,9 +13,9 @@
 
 const MEET_FREE_LIMIT_MINUTES = 60;
 
-/** 開催形式がMeet自動発行かどうか */
+/** 開催形式がMeet自動発行かどうか（EVENT_FORMATS の値と完全一致で判定する） */
 function isAutoMeet_(format) {
-  return String(format).indexOf('自動発行') !== -1;
+  return String(format).trim() === EVENT_FORMATS.MEET;
 }
 
 /** 自動発行Meetで60分を超え、予定の分割が必要かどうか */

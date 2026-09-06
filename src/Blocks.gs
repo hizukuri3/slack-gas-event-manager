@@ -54,6 +54,11 @@ function buildAnnouncementBlocks_(ev, participants, participantsUrl, calendarUrl
     // 分割Meet：区間ごとに別URLなので、各回の時間とURLを一覧で示す
     headerText += ':round_pushpin: 各回のMeet URL（60分ごとに切り替え）:\n' +
       scheduleLines.map(function (l) { return '　' + escapeSlackText_(l); }).join('\n') + '\n';
+  } else if (ev.vcRoom && ev.location) {
+    // Discord VC：生URLではなく部屋名のリンクにする。参加者が覚えるのは部屋の名前で、
+    // URLは踏むだけのものなので、名前を前に出したほうが集合場所として伝わる
+    headerText += ':speaker: 会場: <' + ev.location + '|' +
+      escapeSlackText_(ev.vcRoom) + '>（Discord VC）\n';
   } else {
     headerText += ':round_pushpin: 場所: ' + escapeSlackText_(ev.location || '（未定）') + '\n';
   }

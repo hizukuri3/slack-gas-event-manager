@@ -42,38 +42,123 @@ function setupTriggers() {
       .forForm(formId)
       .onFormSubmit()
       .create();
-    applyFormHints_(formId);
   });
   initializeSheets();
+  // ヒントと選択肢の反映は initializeSheets() の後に回す。
+  // VC部屋の選択肢はVCルームリストが正なので、シートが出来ていないと空になる
+  syncVcRoomChoices();
   // 師匠リストシートの内容をプロパティへ反映する。
   // プロパティで師匠を管理していた既存インスタンスは、ここで初回移行が走る
   syncMasterList();
 }
 
 /**
- * フォームの設問に入力ヒント（説明文）を自動設定する。
- * 特に無料版Meetの60分制限と予定分割の挙動を、入力時点で主催者に伝える。
+ * フォームの設問に入力ヒント（説明文）と選択肢を反映する。
+ *
+ * 選択肢まで面倒を見るのは、開催形式もVC部屋も「コード／シートが正」で、
+ * フォームはその写しにすぎないため。buildFormItems_（Bootstrap.gs）は
+ * フォームを新規作成したときにしか走らないので、そちらだけを直しても
+ * すでに動いているインスタンスには永久に反映されない。ここを通しておけば
+ * setupTriggers() の実行で既存フォームも追随する。
+ *
+ * FormApp.openById() は1回およそ1秒かかるが、この関数はセットアップと
+ * シート編集トリガーからしか呼ばれず、Slackの3秒ルールの外にある。
  */
-function applyFormHints_(formId) {
+function applyFormHints_(formId, vcRoomChoices) {
   const form = FormApp.openById(formId);
   form.getItems().forEach(function (item) {
     const title = item.getTitle();
+
     if (title === FORM_TITLES.FORMAT) {
+      setChoicesIfMultipleChoice_(item, EVENT_FORMAT_VALUES);
+      // ラベルを短くしたぶん、選択肢の意味はすべてここで説明する
       item.setHelpText(
-        '①オンライン・自動発行は無料版Google Meetを使用します。' +
-        '3人以上の通話は60分で自動切断されるため、60分を超えるイベントは' +
-        'カレンダー予定が60分ごとに自動分割されます（各回で別々のMeet URLを発行。' +
-        '切れても次の回のURLへ待ち時間なしで入室可能）。切断なしで開催したい場合は' +
-        '②を選び、時間制限のないツールのURLを入力してください。'
+        '「' + EVENT_FORMATS.DISCORD + '」… 下の「' + FORM_TITLES.VC_ROOM +
+        '」で選んだ部屋を自動で押さえます（会場URLの入力は不要です）。\n' +
+        '「' + EVENT_FORMATS.MEET + '」… URLを自動発行します。無料版のため3人以上の通話は' +
+        '60分で自動切断され、60分を超えるイベントはカレンダー予定が60分ごとに自動分割されます' +
+        '（各回で別々のURLを発行。切れても次の回へ待ち時間なしで入室可能）。\n' +
+        '「' + EVENT_FORMATS.MANUAL_URL + '」「' + EVENT_FORMATS.OFFLINE + '」… 下の「' +
+        FORM_TITLES.LOCATION + '」の入力が必要です。'
       );
     }
+
+    if (title === FORM_TITLES.VC_ROOM) {
+      if (vcRoomChoices && vcRoomChoices.length > 0) {
+        setChoicesIfMultipleChoice_(item, vcRoomChoices);
+      }
+      item.setHelpText(
+        '「' + EVENT_FORMATS.DISCORD + '」を選んだ場合のみ使われます（他の形式では無視されます）。\n' +
+        '「' + VC_ROOM_AUTO + '」にしておくと、その時間に空いている部屋を自動で確保するため' +
+        '「部屋が取れない」がほぼ起きません。部屋を指名した場合、その部屋が埋まっていると' +
+        '登録できず差し戻しになります。'
+      );
+    }
+
     if (title === FORM_TITLES.LOCATION) {
       item.setHelpText(
-        '開催形式が「②オンライン・手動URL」「③オフライン・対面」の場合は必須です。' +
-        '「①オンライン・自動発行」の場合は空欄のままにしてください（Meet URLが自動で入ります）。'
+        '開催形式が「' + EVENT_FORMATS.MANUAL_URL + '」「' + EVENT_FORMATS.OFFLINE +
+        '」の場合は必須です。\n' +
+        '「' + EVENT_FORMATS.DISCORD + '」「' + EVENT_FORMATS.MEET +
+        '」の場合は空欄のままにしてください（URLが自動で入ります）。'
       );
     }
   });
+}
+
+/**
+ * 選択式の設問なら選択肢を差し替える。
+ * 型を確かめてから触るのは、設問を作り直して型が変わっていた場合に
+ * asMultipleChoiceItem() が例外を投げ、ヒント付与ごと止まってしまうため。
+ */
+function setChoicesIfMultipleChoice_(item, choices) {
+  if (item.getType() !== FormApp.ItemType.MULTIPLE_CHOICE) return;
+  item.asMultipleChoiceItem().setChoiceValues(choices);
+}
+
+/**
+ * VCルームリストの内容をフォームの「VC部屋」設問へ反映する。
+ * 管理用①のシート編集・行削除トリガーから呼ばれ、部屋を1行足すと
+ * その場でフォームでも選べるようになる。
+ * @return {{roomCount: number, formCount: number, failed: number}}
+ */
+function syncVcRoomChoices() {
+  const config = getConfig_();
+  const choices = vcRoomChoiceValues_(config);
+  const formIds = [config.formId];
+  if (config.masterFormId && config.masterFormId !== config.formId) {
+    formIds.push(config.masterFormId);
+  }
+
+  let formCount = 0;
+  let failed = 0;
+  formIds.forEach(function (formId) {
+    if (!formId) return;
+    try {
+      applyFormHints_(formId, choices);
+      formCount++;
+    } catch (err) {
+      // 片方のフォームが壊れていても、もう片方の反映は続ける
+      failed++;
+      console.warn('VC部屋の選択肢を反映できませんでした (' + formId + '): ' + err);
+    }
+  });
+  // 先頭の「おまかせ」は部屋ではないので数から外す
+  return { roomCount: choices.length - 1, formCount: formCount, failed: failed };
+}
+
+/** VC部屋の同期結果を、操作した人へトーストで知らせる（師匠リストと同じ流儀） */
+function notifyVcRoomSync_(spreadsheet, result) {
+  if (!spreadsheet) return;
+  let message = '使えるVC部屋 ' + result.roomCount + '件をフォームへ反映しました';
+  if (result.roomCount === 0) {
+    message = '使えるVC部屋が0件です。この状態で「' + EVENT_FORMATS.DISCORD +
+      '」を選ぶと登録できません（VC名とチャンネルURLの両方が必要です）';
+  }
+  if (result.failed > 0) {
+    message += ' / ' + result.failed + '件のフォームへは反映できませんでした（ログを確認してください）';
+  }
+  spreadsheet.toast(message, SHEET_VC_ROOMS, result.roomCount === 0 || result.failed > 0 ? 20 : 8);
 }
 
 /** フォーム送信時のメイン処理（新規登録と回答編集の両方が飛んでくる） */
@@ -106,7 +191,7 @@ function onFormSubmit(e) {
     }
 
     if (existing) {
-      handleEventEdit_(config, existing, answers);
+      handleEventEdit_(config, existing, answers, formResponse);
     } else {
       // 3. 二重登録ガード（「編集のつもりで新規送信」対策）
       const duplicate = findDuplicateEvent_(config, answers);
@@ -138,7 +223,11 @@ function extractAnswers_(formResponse) {
     end: end,
     capacity: Number(map[FORM_TITLES.CAPACITY]),
     status: String(map[FORM_TITLES.STATUS] || ''),
-    format: String(map[FORM_TITLES.FORMAT] || ''),
+    // 判定は EVENT_FORMATS との完全一致なので、入り口で前後の空白を落としておく
+    format: String(map[FORM_TITLES.FORMAT] || '').trim(),
+    // 設問そのものが無い古いフォームでは空になる。assignVcRoom_ は
+    // 空を「おまかせ」と同じ扱いにするので、それでも登録は通る
+    vcRoom: String(map[FORM_TITLES.VC_ROOM] || '').trim(),
     location: String(map[FORM_TITLES.LOCATION] || '').trim(),
     description: String(map[FORM_TITLES.DESCRIPTION] || ''),
     preparation: String(map[FORM_TITLES.PREPARATION] || '')
@@ -190,9 +279,16 @@ function validateAnswers_(answers, existing) {
   if (!Number.isInteger(answers.capacity) || answers.capacity < 1) {
     errors.push('定員は1以上の整数で入力してください。');
   }
-  if (!isAutoMeet_(answers.format) && !answers.location) {
-    errors.push('開催形式が「②オンライン・手動URL」「③オフライン・対面」の場合、' +
-      '「会場URL または 開催場所」の入力は必須です。');
+  // 開催形式は選択肢のどれかでなければならない。一致しない値が届くのは、フォームの
+  // 選択肢が手で書き換えられたときで、放っておくと「会場URLが要る形式」として静かに
+  // 扱われる。ここで弾いておけば、運営がその場で気づける
+  if (EVENT_FORMAT_VALUES.indexOf(answers.format) === -1) {
+    errors.push('開催形式「' + answers.format + '」は選択肢にありません。' +
+      'フォームの選択肢が書き換えられた可能性があります。運営にお問い合わせください。');
+  } else if (!isAutoMeet_(answers.format) && !isDiscordVc_(answers.format) && !answers.location) {
+    // Discord VCとMeet自動発行は、会場URLをシステムが埋めるので入力を求めない
+    errors.push('開催形式が「' + EVENT_FORMATS.MANUAL_URL + '」「' + EVENT_FORMATS.OFFLINE +
+      '」の場合、「' + FORM_TITLES.LOCATION + '」の入力は必須です。');
   }
   return errors;
 }
@@ -284,8 +380,22 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
     slackTs: '',
     editUrl: formResponse.getEditResponseUrl(),
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    vcRoom: ''
   };
+
+  // 0. Discord VCなら部屋を確保する。カレンダー登録より先に済ませるのは、
+  //    確保できなかったときにカレンダー予定も告知も作らずに差し戻すため
+  //    （先に作ってしまうと、差し戻しのたびに孤児の予定が残る）
+  if (isDiscordVc_(ev.format)) {
+    const assigned = assignVcRoom_(config, ev, answers.vcRoom);
+    if (!assigned.room) {
+      notifyFormError_(config, formResponse, assigned.errors);
+      return;
+    }
+    ev.vcRoom = assigned.room.name;
+    ev.location = assigned.room.url;
+  }
 
   // 1. カレンダー登録（自動発行の場合はMeet URLを取得して場所に採用。60分超なら分割）
   const calendarResult = createCalendarEvents_(config, ev);
@@ -314,6 +424,10 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
   let dmText =
     ':white_check_mark: イベント「' + ev.title + '」を登録しました。\n' +
     '内容の変更・中止はこちらの回答編集用URLから行ってください:\n' + ev.editUrl;
+  if (ev.vcRoom) {
+    // どの部屋が確保されたかは主催者が最初に知りたい情報なので、編集URLの直後に置く
+    dmText += '\n\n:speaker: 会場VC: *' + ev.vcRoom + '* を確保しました\n' + ev.location;
+  }
   if (calendarResult.htmlLink) {
     // 登録内容がカレンダーへ正しく反映されたか、主催者がその場で確認できるようにする
     dmText += '\n\n:calendar: 登録された予定を確認する:\n' + calendarResult.htmlLink;
@@ -328,12 +442,17 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
 
 // ==================== 回答編集（変更・中止） ====================
 
-function handleEventEdit_(config, existing, answers) {
+function handleEventEdit_(config, existing, answers, formResponse) {
   const now = new Date();
   const ev = existing;
   // 変更前の日時を控える（時間変更の周知でビフォー/アフターを示すため）
   const prevStart = existing.start;
   const prevEnd = existing.end;
+  // 変更前のVC部屋。取り直しで変わったら参加者へ周知する必要がある
+  const prevRoom = existing.vcRoom;
+  // 中止から「開催」へ戻す編集か。中止の間その部屋は空き扱いになっており、
+  // 他のイベントに取られている可能性があるため、復活時は必ず取り直す
+  const revived = isCancelledStatus_(existing.status) && !isCancelledStatus_(answers.status);
   // 開催時間そのものが変わったか（開催形式の変更は含めない。参加者への時間変更周知の判定に使う）
   const timeChanged =
     existing.start.getTime() !== answers.start.getTime() ||
@@ -352,15 +471,44 @@ function handleEventEdit_(config, existing, answers) {
   ev.description = answers.description;
   ev.preparation = answers.preparation;
   ev.updatedAt = now;
-  // Meet自動発行の場合は既存のMeet URLを維持、それ以外はフォーム入力値を採用
-  if (!isAutoMeet_(ev.format)) {
+  // Meet自動発行とDiscord VCは会場URLをシステムが持つので、フォーム入力値で上書きしない。
+  // ここを素通しにすると、主催者が会場欄を空にしたまま再送信しただけでURLが消える
+  if (!isAutoMeet_(ev.format) && !isDiscordVc_(ev.format)) {
     ev.location = answers.location;
   }
 
   if (isCancelledStatus_(ev.status)) {
+    // 中止すると vcRoomsInUse_ の対象から外れるので、部屋は自動的に空く。
+    // シートには部屋名を残す（中止の告知に会場を出したままにするため）。
+    // 「開催」へ戻す編集は上の revived で必ず取り直すので、空いた部屋を
+    // 持ったまま復活することはない
     cancelEvent_(config, ev);
     return;
   }
+
+  // ---- Discord VCの部屋の取り直し ----
+  // 取り直すのは、日時か開催形式が変わったとき・部屋を指名し直したとき・
+  // 中止から復活したとき・まだ部屋を持っていないとき（他形式からの切り替え）だけ。
+  // 変わっていないのに取り直すと、同じ部屋を取り戻せる保証がなく
+  // 「イベント名を直しただけで部屋が変わった」が起こりうる
+  if (isDiscordVc_(ev.format)) {
+    const namedDifferentRoom = answers.vcRoom &&
+      answers.vcRoom !== VC_ROOM_AUTO && answers.vcRoom !== ev.vcRoom;
+    if (scheduleChanged || namedDifferentRoom || revived || !ev.vcRoom) {
+      const assigned = assignVcRoom_(config, ev, answers.vcRoom);
+      if (!assigned.room) {
+        // 何も更新せずに差し戻す。イベントは変更前の日時・部屋のまま残る
+        notifyFormError_(config, formResponse, assigned.errors);
+        return;
+      }
+      ev.vcRoom = assigned.room.name;
+      ev.location = assigned.room.url;
+    }
+  } else if (ev.vcRoom) {
+    // Discord以外へ切り替えたら部屋を手放す（押さえたままにしない）
+    ev.vcRoom = '';
+  }
+  const roomChanged = ev.vcRoom !== prevRoom;
 
   // ---- ステータス「開催」のままの内容変更：一括更新 ----
   const participantsUrl = buildParticipantsPageUrl_(config, ev.eventId);
@@ -378,8 +526,8 @@ function handleEventEdit_(config, existing, answers) {
 
   // 開催時間が変わった場合は、告知スレッドと参加者DMで能動的に周知する
   // （Slackはメッセージ編集ではプッシュ通知を出さず、告知の再描画だけでは参加者が気づけないため）
-  if (timeChanged) {
-    notifyScheduleChange_(config, ev, prevStart, prevEnd);
+  if (timeChanged || roomChanged) {
+    notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom);
   }
 
   let dmText = ':pencil2: イベント「' + ev.title + '」の内容を更新しました。';
@@ -394,23 +542,44 @@ function handleEventEdit_(config, existing, answers) {
 }
 
 /**
- * 開催時間の変更を、告知スレッドへの投稿と参加者・キャンセル待ちへのDMで周知する。
+ * 開催時間・会場VCの変更を、告知スレッドへの投稿と参加者・キャンセル待ちへのDMで周知する。
+ *
+ * 会場VCの変更も同じ強度で伝えるのは、時間の変更とまったく同じ理由による。
+ * Slackはメッセージの編集では通知も未読も出さないため、告知を再描画しただけでは
+ * 「いつもの部屋」に集まってしまう人が出る。黙って部屋が変わるのが一番まずい。
+ *
  * @param {Object} config 設定
- * @param {Object} ev 変更後のイベント（ev.start / ev.end は更新済み）
+ * @param {Object} ev 変更後のイベント（start / end / vcRoom は更新済み）
  * @param {Date} prevStart 変更前の開始日時
  * @param {Date} prevEnd 変更前の終了日時
+ * @param {string} prevRoom 変更前のVC部屋名（無ければ空文字）
  */
-function notifyScheduleChange_(config, ev, prevStart, prevEnd) {
-  const before = formatDateRange_(prevStart, prevEnd);
-  const after = formatDateRange_(ev.start, ev.end);
+function notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom) {
+  const timeChanged = prevStart.getTime() !== ev.start.getTime() ||
+    prevEnd.getTime() !== ev.end.getTime();
+  const roomChanged = String(prevRoom || '') !== String(ev.vcRoom || '');
+  if (!timeChanged && !roomChanged) return;
+
+  const lines = [];
+  if (timeChanged) {
+    lines.push('• 日時（変更前）: ' + formatDateRange_(prevStart, prevEnd));
+    lines.push('• 日時（変更後）: ' + formatDateRange_(ev.start, ev.end));
+  }
+  if (roomChanged) {
+    lines.push('• 会場VC（変更前）: ' + (prevRoom || '（なし）'));
+    lines.push('• 会場VC（変更後）: ' + (ev.vcRoom || '（なし）'));
+  }
+  const detail = lines.join('\n');
+  const headline = timeChanged && roomChanged ? '開催日時と会場が変更されました'
+    : timeChanged ? '開催日時が変更されました'
+    : '会場が変更されました';
 
   // 1. 告知スレッドへお知らせを投稿（フォロワー全体にプッシュ通知が飛ぶ）
   if (ev.slackTs) {
     postMessage_(
       config, ev.slackChannel,
-      ':alarm_clock: イベント「' + ev.title + '」の開催日時が変更されました。\n' +
-      '• 変更前: ' + before + '\n' +
-      '• 変更後: ' + after + '\n' +
+      ':alarm_clock: イベント「' + ev.title + '」の' + headline + '。\n' +
+      detail + '\n' +
       '参加登録済みの方へは個別にDMでもお知らせしています。',
       ev.slackTs
     );
@@ -425,9 +594,8 @@ function notifyScheduleChange_(config, ev, prevStart, prevEnd) {
     const suffix = p.status === PSTATUS.WAITLIST ? '（現在キャンセル待ちで登録中です）' : '';
     sendDirectMessage_(
       config, p.userId,
-      ':alarm_clock: 参加登録中のイベント「' + ev.title + '」の開催日時が変更されました。' + suffix + '\n' +
-      '• 変更前: ' + before + '\n' +
-      '• 変更後: ' + after + '\n' +
+      ':alarm_clock: 参加登録中のイベント「' + ev.title + '」の' + headline + '。' + suffix + '\n' +
+      detail + '\n' +
       'ご都合が合わなくなった場合は、告知メッセージの「取り消す」ボタンからキャンセルできます。' +
       linkLine
     );

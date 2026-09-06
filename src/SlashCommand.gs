@@ -141,7 +141,7 @@ function extractPrefillEntryIds_(formId) {
     }
 
     if (title === FORM_TITLES.STATUS && item.getType() === FormApp.ItemType.MULTIPLE_CHOICE) {
-      // 「中止」を含まない選択肢（=①開催）を事前入力の対象にする
+      // 「中止」を含まない選択肢（=「開催」）を事前入力の対象にする
       const mcItem = item.asMultipleChoiceItem();
       const openChoice = mcItem.getChoices().find(function (choice) {
         return choice.getValue().indexOf('中止') === -1;
