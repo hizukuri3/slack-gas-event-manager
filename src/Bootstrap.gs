@@ -153,7 +153,7 @@ function createSpreadsheet_(name) {
 /** イベント登録フォームを formSpec_() どおりに新規作成してIDを返す（マイドライブ直下にできる） */
 function createEventForm_(name) {
   const form = FormApp.create(name);
-  buildFormItems_(form);
+  ensureFormItems_(form);
   return form.getId();
 }
 
@@ -178,28 +178,76 @@ function calendarSettingsUrl_(id) {
     encodeURIComponent(Utilities.base64Encode(id));
 }
 
-/** formSpec_() に従ってフォームへ設問を追加する（順序も定義どおり） */
-function buildFormItems_(form) {
-  formSpec_().forEach(function (spec) {
-    let item;
-    switch (spec.type) {
-      case 'TEXT':
-        item = form.addTextItem(); break;
-      case 'PARAGRAPH_TEXT':
-        item = form.addParagraphTextItem(); break;
-      case 'DATETIME':
-        item = form.addDateTimeItem().setIncludesYear(true); break; // parseDateTime_ は年込みを前提
-      case 'TIME':
-        item = form.addTimeItem(); break;
-      case 'MULTIPLE_CHOICE':
-        item = form.addMultipleChoiceItem(); break;
-      default:
-        throw new Error('未対応のフォーム設問タイプ: ' + spec.type + '（' + spec.title + '）');
-    }
-    item.setTitle(spec.title);
-    if (spec.choices) {
-      item.setChoiceValues(spec.choices);
-    }
-    item.setRequired(!!spec.required);
+/**
+ * formSpec_() のうち、フォームにまだ無い設問だけを追加する（順序も定義どおり）。
+ *
+ * 空のフォームに対しては全設問が入るので、新規作成時はこれ1本で足りる。
+ * 効いてくるのはすでに動いているインスタンスのほうで、設問を作る処理が
+ * createEventForm_ にしか無いと、コードへ設問を足しても稼働中のフォームには
+ * 永久に反映されない。ensureHeader_ が稼働中インスタンスのシート見出しを
+ * 追随させているのと同じ趣旨で、その穴をここで塞ぐ。
+ *
+ * ★ 既存の設問は変更も削除も並べ替えもしない ★
+ * 運営がフォーム側で足した設問や、意図して動かした並びを壊さないため、
+ * 触るのは「追加した設問をどこへ置くか」だけにとどめる。
+ *
+ * @return {string[]} 追加した設問のタイトル（何も足さなければ空配列）
+ */
+function ensureFormItems_(form) {
+  const spec = formSpec_();
+  const added = [];
+  spec.forEach(function (s, i) {
+    if (findFormItemByTitle_(form, s.title)) return;
+    const item = addFormItem_(form, s); // 末尾に追加される
+    form.moveItem(item.getIndex(), insertIndexForSpec_(form, spec, i));
+    added.push(s.title);
   });
+  return added;
+}
+
+/** タイトルが一致する設問を返す（無ければ null） */
+function findFormItemByTitle_(form, title) {
+  const found = form.getItems().find(function (item) {
+    return item.getTitle() === title;
+  });
+  return found || null;
+}
+
+/**
+ * 追加した設問を差し込む位置。定義上ひとつ前にある設問の直後に置く。
+ * 前の設問がフォームに1つも見当たらなければ先頭へ。
+ * 位置を絶対値（定義上の何番目か）で決めないのは、運営が独自に足した設問が
+ * あると番号がずれ、関係のない場所へ割り込んでしまうため。
+ */
+function insertIndexForSpec_(form, spec, specIndex) {
+  for (let i = specIndex - 1; i >= 0; i--) {
+    const prev = findFormItemByTitle_(form, spec[i].title);
+    if (prev) return prev.getIndex() + 1;
+  }
+  return 0;
+}
+
+/** 設問定義1件ぶんをフォームへ追加する（末尾に入る） */
+function addFormItem_(form, spec) {
+  let item;
+  switch (spec.type) {
+    case 'TEXT':
+      item = form.addTextItem(); break;
+    case 'PARAGRAPH_TEXT':
+      item = form.addParagraphTextItem(); break;
+    case 'DATETIME':
+      item = form.addDateTimeItem().setIncludesYear(true); break; // parseDateTime_ は年込みを前提
+    case 'TIME':
+      item = form.addTimeItem(); break;
+    case 'MULTIPLE_CHOICE':
+      item = form.addMultipleChoiceItem(); break;
+    default:
+      throw new Error('未対応のフォーム設問タイプ: ' + spec.type + '（' + spec.title + '）');
+  }
+  item.setTitle(spec.title);
+  if (spec.choices) {
+    item.setChoiceValues(spec.choices);
+  }
+  item.setRequired(!!spec.required);
+  return item;
 }
