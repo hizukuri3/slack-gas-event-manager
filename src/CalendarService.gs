@@ -89,7 +89,7 @@ function createCalendarEvents_(config, ev) {
       };
       options.conferenceDataVersion = 1;
     } else {
-      // 手動URL・オフラインは入力テキストをそのまま「場所」欄へ格納（分割もしない）
+      // その他のオンライン・対面は入力テキストをそのまま「場所」欄へ格納（分割もしない）
       resource.location = ev.location;
     }
 

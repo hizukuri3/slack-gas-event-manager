@@ -59,6 +59,11 @@ function setupTriggers() {
  * すでに動いているインスタンスには永久に反映されない。ここを通しておけば
  * setupTriggers() の実行で既存フォームも追随する。
  *
+ * ★ ヘルプ文は、記入する人がその場で選ぶのに要ることだけに絞る ★
+ * カレンダーの分割や差し戻しの条件といった仕組みは書かない。知らなくても
+ * 記入には困らず、差し戻しになれば理由と直し方がDMで届くため。
+ * 長い説明は読まれず、本当に要る一文まで埋もれる。
+ *
  * FormApp.openById() は1回およそ1秒かかるが、この関数はセットアップと
  * シート編集トリガーからしか呼ばれず、Slackの3秒ルールの外にある。
  */
@@ -69,15 +74,10 @@ function applyFormHints_(formId, vcRoomChoices) {
 
     if (title === FORM_TITLES.FORMAT) {
       setChoicesIfMultipleChoice_(item, EVENT_FORMAT_VALUES);
-      // ラベルを短くしたぶん、選択肢の意味はすべてここで説明する
+      // 「URLの入力が要る形式」は会場の設問側で伝えるので、ここでは繰り返さない
       item.setHelpText(
-        '「' + EVENT_FORMATS.DISCORD + '」… 下の「' + FORM_TITLES.VC_ROOM +
-        '」で選んだ部屋を自動で押さえます（会場URLの入力は不要です）。\n' +
-        '「' + EVENT_FORMATS.MEET + '」… URLを自動発行します。無料版のため3人以上の通話は' +
-        '60分で自動切断され、60分を超えるイベントはカレンダー予定が60分ごとに自動分割されます' +
-        '（各回で別々のURLを発行。切れても次の回へ待ち時間なしで入室可能）。\n' +
-        '「' + EVENT_FORMATS.MANUAL_URL + '」「' + EVENT_FORMATS.OFFLINE + '」… 下の「' +
-        FORM_TITLES.LOCATION + '」の入力が必要です。'
+        EVENT_FORMATS.DISCORD + ' と ' + EVENT_FORMATS.MEET + ' は会場URLが自動で入ります。\n' +
+        EVENT_FORMATS.MEET + ' は60分で切れるため、長いイベントは1時間ごとに別のURLになります。'
       );
     }
 
@@ -86,19 +86,15 @@ function applyFormHints_(formId, vcRoomChoices) {
         setChoicesIfMultipleChoice_(item, vcRoomChoices);
       }
       item.setHelpText(
-        '「' + EVENT_FORMATS.DISCORD + '」を選んだ場合のみ使われます（他の形式では無視されます）。\n' +
-        '「' + VC_ROOM_AUTO + '」にしておくと、その時間に空いている部屋を自動で確保するため' +
-        '「部屋が取れない」がほぼ起きません。部屋を指名した場合、その部屋が埋まっていると' +
-        '登録できず差し戻しになります。'
+        EVENT_FORMATS.DISCORD + ' のときだけ選んでください。' +
+        '特に希望がなければ「' + VC_ROOM_AUTO + '」で大丈夫です。'
       );
     }
 
     if (title === FORM_TITLES.LOCATION) {
       item.setHelpText(
-        '開催形式が「' + EVENT_FORMATS.MANUAL_URL + '」「' + EVENT_FORMATS.OFFLINE +
-        '」の場合は必須です。\n' +
-        '「' + EVENT_FORMATS.DISCORD + '」「' + EVENT_FORMATS.MEET +
-        '」の場合は空欄のままにしてください（URLが自動で入ります）。'
+        '「' + EVENT_FORMATS.OTHER_ONLINE + '」「' + EVENT_FORMATS.OFFLINE +
+        '」のときだけ入力してください。'
       );
     }
   });
@@ -157,15 +153,20 @@ function syncVcRoomChoices() {
  */
 function syncFormItems() {
   const config = getConfig_();
+  const renamed = [];
   const added = [];
   let formCount = 0;
   let failed = 0;
+  // 弟子用・師匠用で同じ内容になるのが普通なので、ログは重複を除いて1行にまとめる
+  const collect = function (list, values) {
+    values.forEach(function (v) { if (list.indexOf(v) === -1) list.push(v); });
+  };
 
   formIds_(config).forEach(function (formId) {
     try {
-      ensureFormItems_(FormApp.openById(formId)).forEach(function (title) {
-        if (added.indexOf(title) === -1) added.push(title);
-      });
+      const result = ensureFormItems_(FormApp.openById(formId));
+      collect(renamed, result.renamed);
+      collect(added, result.added);
       formCount++;
     } catch (err) {
       // 片方のフォームが壊れていても、もう片方の追随は続ける
@@ -174,10 +175,17 @@ function syncFormItems() {
     }
   });
 
-  console.log(added.length > 0
-    ? 'フォームへ設問を追加しました: ' + added.join(' / ') + '（対象フォーム' + formCount + '件）'
-    : 'フォームの設問は定義どおりです（対象フォーム' + formCount + '件）');
-  return { added: added, formCount: formCount, failed: failed };
+  const suffix = '（対象フォーム' + formCount + '件）';
+  if (renamed.length > 0) {
+    console.log('フォームの設問を改名しました: ' + renamed.join(' / ') + suffix);
+  }
+  if (added.length > 0) {
+    console.log('フォームへ設問を追加しました: ' + added.join(' / ') + suffix);
+  }
+  if (renamed.length === 0 && added.length === 0) {
+    console.log('フォームの設問は定義どおりです' + suffix);
+  }
+  return { renamed: renamed, added: added, formCount: formCount, failed: failed };
 }
 
 /** 弟子用・師匠用（設定されていれば）のフォームIDを返す */
@@ -329,7 +337,7 @@ function validateAnswers_(answers, existing) {
       'フォームの選択肢が書き換えられた可能性があります。運営にお問い合わせください。');
   } else if (!isAutoMeet_(answers.format) && !isDiscordVc_(answers.format) && !answers.location) {
     // Discord VCとMeet自動発行は、会場URLをシステムが埋めるので入力を求めない
-    errors.push('開催形式が「' + EVENT_FORMATS.MANUAL_URL + '」「' + EVENT_FORMATS.OFFLINE +
+    errors.push('開催形式が「' + EVENT_FORMATS.OTHER_ONLINE + '」「' + EVENT_FORMATS.OFFLINE +
       '」の場合、「' + FORM_TITLES.LOCATION + '」の入力は必須です。');
   }
   return errors;

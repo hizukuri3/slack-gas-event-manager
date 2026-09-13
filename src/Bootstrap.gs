@@ -187,13 +187,17 @@ function calendarSettingsUrl_(id) {
  * 永久に反映されない。ensureHeader_ が稼働中インスタンスのシート見出しを
  * 追随させているのと同じ趣旨で、その穴をここで塞ぐ。
  *
- * ★ 既存の設問は変更も削除も並べ替えもしない ★
+ * ★ 既存の設問は、改名履歴にあるタイトルの付け替え以外は触らない ★
  * 運営がフォーム側で足した設問や、意図して動かした並びを壊さないため、
- * 触るのは「追加した設問をどこへ置くか」だけにとどめる。
+ * 変更・削除・並べ替えはしない。追加した設問をどこへ置くかだけを決める。
  *
- * @return {string[]} 追加した設問のタイトル（何も足さなければ空配列）
+ * 改名を追加より先に済ませるのは、順番が逆だと旧タイトルの設問を
+ * 「足りない設問」とみなして、同じ設問を二重に作ってしまうため。
+ *
+ * @return {{renamed: string[], added: string[]}} 改名した「旧 → 新」と、追加した設問のタイトル
  */
 function ensureFormItems_(form) {
+  const renamed = renameFormItems_(form);
   const spec = formSpec_();
   const added = [];
   spec.forEach(function (s, i) {
@@ -202,7 +206,28 @@ function ensureFormItems_(form) {
     form.moveItem(item.getIndex(), insertIndexForSpec_(form, spec, i));
     added.push(s.title);
   });
-  return added;
+  return { renamed: renamed, added: added };
+}
+
+/**
+ * 旧タイトルのままの設問を、現在のタイトルへ付け替える（FORM_TITLE_RENAMES）。
+ * 設問そのものは同じなので、過去の回答も事前入力のエントリIDも引き継がれる。
+ *
+ * 新しいタイトルの設問がすでにある場合は何もしない。運営が手で直した後や、
+ * 2回目以降の実行で、同じタイトルの設問を2つ作らないため。
+ *
+ * @return {string[]} 改名した「旧 → 新」
+ */
+function renameFormItems_(form) {
+  const renamed = [];
+  FORM_TITLE_RENAMES.forEach(function (rename) {
+    if (findFormItemByTitle_(form, rename.to)) return;
+    const item = findFormItemByTitle_(form, rename.from);
+    if (!item) return;
+    item.setTitle(rename.to);
+    renamed.push(rename.from + ' → ' + rename.to);
+  });
+  return renamed;
 }
 
 /** タイトルが一致する設問を返す（無ければ null） */

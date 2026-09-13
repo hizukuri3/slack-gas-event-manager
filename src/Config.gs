@@ -53,7 +53,7 @@ const COL = {
   CAPACITY: 6,        // 定員
   STATUS: 7,          // ステータス（開催 / 中止）
   FORMAT: 8,          // 開催形式
-  LOCATION: 9,        // 会場URL または 開催場所（Meet自動発行時はMeet URL）
+  LOCATION: 9,        // 会場のURLまたは場所（Meet自動発行時はMeet URL、Discord VC時は部屋のURL）
   DESCRIPTION: 10,    // 概要・対象者
   PREPARATION: 11,    // 事前準備・持ち物・資料リンク
   CALENDAR_EVENT_ID: 12, // GoogleカレンダーのイベントID
@@ -163,6 +163,7 @@ const ENABLED_VALUES = ['有効'];
 const DISABLED_VALUES = ['無効'];
 
 // ---- フォームの設問タイトル（フォーム側の設問名と完全一致させること）----
+// ★ タイトルを変えるときは、下の FORM_TITLE_RENAMES にも旧タイトルを足すこと ★
 const FORM_TITLES = {
   TITLE: 'イベント名',
   ORGANIZER: '主催者のSlackユーザーID',
@@ -172,10 +173,21 @@ const FORM_TITLES = {
   STATUS: 'イベントのステータス',
   FORMAT: '開催形式',
   VC_ROOM: 'VC部屋',
-  LOCATION: '会場URL または 開催場所',
+  LOCATION: '会場のURLまたは場所',
   DESCRIPTION: '概要・対象者',
   PREPARATION: '事前準備・持ち物・資料リンク'
 };
+
+// ---- 設問タイトルの改名履歴（旧タイトル → 現在のタイトル）----
+// コードは設問をタイトルの完全一致で探すので、FORM_TITLES を書き換えただけでは
+// 稼働中のフォームの設問が見つからなくなる。しかも syncFormItems() が「足りない設問」
+// とみなして新しいタイトルでもう1つ追加し、旧タイトルの設問に入力された値は
+// 誰にも読まれなくなる。ここに旧タイトルを残しておくと、既存の設問を改名して
+// 引き継ぐ（回答も事前入力のエントリIDもそのまま）。
+// 稼働中のインスタンスがすべて setupTriggers() を通ったら、行ごと消してよい。
+const FORM_TITLE_RENAMES = [
+  { from: '会場URL または 開催場所', to: FORM_TITLES.LOCATION }
+];
 
 // ---- 開催形式の選択肢 ----
 // ここの値がフォームの選択肢そのものであり、イベントマスターに保存される値でもある。
@@ -190,19 +202,19 @@ const FORM_TITLES = {
 //
 // ★ 説明はラベルではなくヘルプ文へ ★
 // ラベルは保存される値なので、短く安定しているほど後から動かしやすい。
-// 「60分ごとに分割される」といった説明は applyFormHints_ のヘルプ文が持つ。
+// 「60分で切れる」といった説明は applyFormHints_ のヘルプ文が持つ。
 // ヘルプ文は判定に使われないため、いくら書き換えても壊れない。
 const EVENT_FORMATS = {
   DISCORD: 'Discord VC',
   MEET: 'Google Meet',
-  MANUAL_URL: 'その他のURL',
-  OFFLINE: '対面（オフライン）'
+  OTHER_ONLINE: 'その他のオンライン',
+  OFFLINE: '対面'
 };
 
 // フォームに並べる順序。妥当性チェックの一覧も兼ねる（単一の真実）
 const EVENT_FORMAT_VALUES = [
   EVENT_FORMATS.DISCORD, EVENT_FORMATS.MEET,
-  EVENT_FORMATS.MANUAL_URL, EVENT_FORMATS.OFFLINE
+  EVENT_FORMATS.OTHER_ONLINE, EVENT_FORMATS.OFFLINE
 ];
 
 // 「VC部屋」設問の先頭の選択肢。これを選ぶと自動割り当てになる。
@@ -212,7 +224,7 @@ const EVENT_FORMAT_VALUES = [
 // 設問そのものは任意にしてある。Googleフォームに条件付き必須が無いため、
 // 必須にすると Discord VC 以外を選ぶ主催者にまで回答を強いることになる。
 // 未回答は assignVcRoom_ が「おまかせ」と同じ扱いにする。
-const VC_ROOM_AUTO = 'おまかせ（自動割り当て）';
+const VC_ROOM_AUTO = 'おまかせ';
 
 /**
  * スクリプトプロパティを読み込んで返す。
