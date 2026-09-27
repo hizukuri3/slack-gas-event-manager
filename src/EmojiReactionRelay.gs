@@ -20,7 +20,7 @@ function handleSlackEvent_(body) {
   const config = getConfig_();
 
   // 署名検証ができないため、InteractionHandler と同じく token 照合で代替する
-  if (config.slackVerificationToken && body.token !== config.slackVerificationToken) {
+  if (body.token !== config.slackVerificationToken) {
     return;
   }
 

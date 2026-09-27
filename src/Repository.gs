@@ -157,17 +157,19 @@ function initializeSheets() {
   const config = getConfig_();
   openSpreadsheets_(config).forEach(function (ss) {
     // システムが書くシートなので、列が増えたときは見出しも追随させる
-    ensureHeader_(getOrCreateSheet_(ss, SHEET_EVENT_MASTER, EVENT_MASTER_HEADER),
-      EVENT_MASTER_HEADER);
-    ensureHeader_(getOrCreateSheet_(ss, SHEET_PARTICIPANTS, PARTICIPANTS_HEADER),
-      PARTICIPANTS_HEADER);
+    const eventMaster = getOrCreateSheet_(ss, SHEET_EVENT_MASTER, EVENT_MASTER_HEADER);
+    ensureHeader_(eventMaster, EVENT_MASTER_HEADER);
+    protectSystemSheet_(eventMaster);
+    const participants = getOrCreateSheet_(ss, SHEET_PARTICIPANTS, PARTICIPANTS_HEADER);
+    ensureHeader_(participants, PARTICIPANTS_HEADER);
+    protectSystemSheet_(participants);
   });
 
   // 次の4シートは管理用①にのみ作る。
   // イベントの参加状況とは無関係な運用設定・内部ログなので公開用②へは出さない。
   const management = SpreadsheetApp.openById(config.managementSpreadsheetId);
   const relayMapping = getOrCreateSheet_(management, SHEET_RELAY_MAPPING, RELAY_MAPPING_HEADER);
-  getOrCreateSheet_(management, SHEET_RELAY_LOG, RELAY_LOG_HEADER);
+  protectSystemSheet_(getOrCreateSheet_(management, SHEET_RELAY_LOG, RELAY_LOG_HEADER));
   getOrCreateSheet_(management, SHEET_MASTER_LIST, MASTER_LIST_HEADER);
   // Discord VCの在庫台帳。空のままでも他の機能には影響しない
   // （開催形式でDiscord VCを選んだときだけ参照される）
@@ -179,6 +181,43 @@ function initializeSheets() {
   // （師匠リストは、この直後に呼ばれる syncMasterList が受け持つ）
   setupEnabledColumn_(relayMapping, RELAY_COL.ENABLED);
   setupEnabledColumn_(vcRooms, VC_ROOM_COL.ENABLED);
+
+  openSpreadsheets_(config).forEach(removeBlankDefaultSheet_);
+}
+
+/**
+ * システムが書くシートに「編集すると警告が出る」保護をかける。
+ *
+ * 管理用①は運営のグループ全員が編集者になるので、Bot専用のシートも手で
+ * 触れてしまう。イベントマスターを手で直しても Slack の告知には反映されず、
+ * 絵文字転送ログの行を消すと同じメッセージが再転送されうる。
+ * 警告どまりにしているのは、どうしても直したいときに直せる道を残すため
+ * （警告のみの保護はスクリプトの書き込みを止めない）。
+ *
+ * すでに何かシート保護がかかっていれば触らない。運営が自分で設定した
+ * 保護（編集者の制限など）を上書きしないため。
+ */
+function protectSystemSheet_(sheet) {
+  if (sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).length > 0) return;
+  sheet.protect()
+    .setDescription('Botが書き込むシートです。手で編集すると Slack の告知などとずれます')
+    .setWarningOnly(true);
+}
+
+/**
+ * スプレッドシート作成時に付いてくる空の「シート1」を消す。
+ * 残しておくと、公開用を開いたメンバーに最初に空のシートが見える。
+ *
+ * 既定の名前のままで、かつ何も書かれていないものだけを対象にする。
+ * 運営が名前を変えたり何か書いたりしたシートは、用途があるとみなして残す。
+ */
+function removeBlankDefaultSheet_(spreadsheet) {
+  spreadsheet.getSheets().forEach(function (sheet) {
+    if (!/^(シート|Sheet)1$/.test(sheet.getName())) return;
+    if (sheet.getLastRow() > 0 || sheet.getLastColumn() > 0) return;
+    if (spreadsheet.getSheets().length <= 1) return; // 最後の1枚は消せない
+    spreadsheet.deleteSheet(sheet);
+  });
 }
 
 // ==================== イベントマスター ====================

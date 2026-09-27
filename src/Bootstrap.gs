@@ -99,13 +99,18 @@ function bootstrap() {
 
   // ---- 手動作業の案内 ----
   logs.push('');
-  logs.push('▼ 手動作業(1): 上のスプレッドシート・フォームはマイドライブにあります。');
-  logs.push('  Drive で共有ドライブの目的フォルダへ移動してください（IDは変わらないので動作に影響なし）。');
-  logs.push('  共有ドライブを使わない（個人で動かす）場合は、この移動は不要です。');
+  logs.push('▼ 手動作業(1): 上のスプレッドシート・フォームはマイドライブ直下にあります。');
+  logs.push('  運営で共同編集するなら、マイドライブに運営用のフォルダを作って運営のGoogleグループへ');
+  logs.push('  「編集者」で共有し、そこへ移動してください（IDは変わらないので動作に影響なし）。');
+  logs.push('  フォルダに入れたファイルはグループ全員が編集者になります。フォームの編集者は全回答を');
+  logs.push('  見られるので、フォームを入れるかは運営で決めてください。');
   logs.push('▼ 手動作業(2): 上の「カレンダー設定」を開き、「アクセス権限」を');
   logs.push('  「一般公開して誰でも利用できるようにする」＋「予定の表示（すべての予定の詳細）」にしてください。');
   logs.push('  （直接開けない場合は、Googleカレンダー左の一覧で該当カレンダー →「設定と共有」）。');
   logs.push('  未設定だとメンバーが告知の「カレンダーを開く」を押しても中身が見えません。');
+  logs.push('▼ 手動作業(3): 上の「イベント一覧（公開用）」を開き、右上の「共有」→「一般的なアクセス」を');
+  logs.push('  「リンクを知っている全員」＋「閲覧者」にしてください。メンバーはここでイベント一覧を見ます。');
+  logs.push('  「運営データ（管理用）」は共有しないでください（運営だけが見る設定・ログが入っています）。');
 
   // ---- 5. シート初期化・トリガー・ヒント付与（Slack系プロパティが揃っていれば実行）----
   // initializeSheets()/setupTriggers() は getConfig_() 経由で SLACK_BOT_TOKEN 等を必須にするため、
@@ -115,7 +120,8 @@ function bootstrap() {
   } catch (configErr) {
     logs.push('');
     logs.push('▼ 次にSlack系プロパティを登録してください:');
-    logs.push('  SLACK_BOT_TOKEN / SLACK_CHANNEL_ID など（README「手動で登録するもの」参照）');
+    logs.push('  SLACK_BOT_TOKEN / SLACK_VERIFICATION_TOKEN / SLACK_CHANNEL_ID');
+    logs.push('  （docs/SETUP.md「手動で登録するもの」参照）');
     logs.push('  登録後、setupTriggers() を手動実行するとシート初期化・トリガー登録・');
     logs.push('  フォームのヒント付与まで完了します。');
     logs.push('  (getConfig_ の不足: ' + configErr.message + ')');
@@ -125,9 +131,14 @@ function bootstrap() {
   setupTriggers(); // initializeSheets() / applyFormHints_() もこの中で実行される
   logs.push('setupTriggers() 実行済み（シート初期化・フォーム送信/定期同期/師匠リスト編集トリガー・ヒント付与）');
   logs.push('');
-  logs.push('▼ 手動作業(3): 管理用スプレッドシートの「師匠リスト」シートに師匠を登録してください。');
+  logs.push('▼ 手動作業(4): 管理用スプレッドシートの「師匠リスト」シートに師匠を登録してください。');
   logs.push('  1行1人でSlackユーザーIDを書くだけです（編集した時点で自動反映されます）。');
   logs.push('  登録された人が /event を打つと、師匠用フォームのリンクが返るようになります。');
+  logs.push('▼ 手動作業(5): 管理用スプレッドシートの「VCルームリスト」シートにDiscordの部屋を登録してください。');
+  logs.push('  空のままだと、開催形式「' + EVENT_FORMATS.DISCORD + '」を選んだ登録はすべて差し戻されます。');
+  logs.push('  一時VCを作るbot（TempVoice など）のハブチャンネルは登録しないでください。');
+  logs.push('▼ 手動作業(6): Webアプリをデプロイし、/exec のURLを WEBAPP_URL に登録してください');
+  logs.push('  （docs/SETUP.md 手順7）。');
   logs.push('');
   logs.push('セットアップ完了。Slackで /event を打ってフォームリンクが返れば成功です。');
   console.log(logs.join('\n'));
@@ -160,8 +171,23 @@ function createEventForm_(name, displayTitle) {
   // FormApp.create はDriveのファイル名と表示タイトルに同じ名前を入れる。
   // ファイル名は運営が見分ける用に残し、回答者に見えるほうだけ差し替える
   form.setTitle(displayTitle);
+  applyFormSettings_(form);
   ensureFormItems_(form);
   return form.getId();
+}
+
+/**
+ * 変更・中止のフローが動くのに要るフォームの設定をそろえる。
+ *
+ * FormApp.create の既定は「回答の編集を許可しない」なので、放っておくと
+ * 主催者にDMで届く回答編集用URLから変更も中止もできない。
+ * 作成時だけでなく setupTriggers() のたびに通すのは、フォームの設定画面で
+ * 誰かが切り替えても次の実行で戻すため。
+ */
+function applyFormSettings_(form) {
+  form.setAllowResponseEdits(true);       // 変更・中止は回答の編集で行う
+  form.setLimitOneResponsePerUser(false); // オンだと編集URLの挙動が変わり、ログインも求められる
+  form.setCollectEmail(false);            // メールアドレスは使わない（個人情報を持たない）
 }
 
 /** スプレッドシートを開くURL（ログの動線用） */
