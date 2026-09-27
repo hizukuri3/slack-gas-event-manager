@@ -38,12 +38,18 @@ function formSpec_() {
     // applyFormHints_ が既存フォームへ反映する内容とずれる
     { title: FORM_TITLES.FORMAT, type: 'MULTIPLE_CHOICE', required: true,
       choices: EVENT_FORMAT_VALUES },
+    // 以降はセクションに分け、開催形式の回答で行き先を切り替える。
+    // 行き先の設定と、VC部屋・会場を必須にするのは applyFormSections_ が受け持つ
+    // （稼働中のフォームへもそこから反映するため、ここには持たせない）
+    { title: FORM_SECTIONS.VC_ROOM, type: 'PAGE_BREAK' },
     // VC部屋の選択肢はVCルームリスト（管理用①）が正で、シート編集のたびに
     // syncVcRoomChoices() が貼り直す。ここではフォーム作成直後に選べる
     // 「おまかせ」だけを置いておく（空の選択肢はFormAppが受け付けないため）
     { title: FORM_TITLES.VC_ROOM, type: 'MULTIPLE_CHOICE', required: false,
       choices: [VC_ROOM_AUTO] },
+    { title: FORM_SECTIONS.VENUE, type: 'PAGE_BREAK' },
     { title: FORM_TITLES.LOCATION, type: 'TEXT', required: false },
+    { title: FORM_SECTIONS.DETAILS, type: 'PAGE_BREAK' },
     { title: FORM_TITLES.DESCRIPTION, type: 'PARAGRAPH_TEXT', required: true },
     { title: FORM_TITLES.PREPARATION, type: 'PARAGRAPH_TEXT', required: false }
   ];
@@ -153,6 +159,9 @@ function createSpreadsheet_(name) {
 /** イベント登録フォームを formSpec_() どおりに新規作成してIDを返す（マイドライブ直下にできる） */
 function createEventForm_(name) {
   const form = FormApp.create(name);
+  // FormApp.create はDriveのファイル名と表示タイトルに同じ名前を入れる。
+  // ファイル名は運営が見分ける用に残し、回答者に見えるほうだけ差し替える
+  form.setTitle(FORM_DISPLAY_TITLE);
   ensureFormItems_(form);
   return form.getId();
 }
@@ -266,6 +275,9 @@ function addFormItem_(form, spec) {
       item = form.addTimeItem(); break;
     case 'MULTIPLE_CHOICE':
       item = form.addMultipleChoiceItem(); break;
+    case 'PAGE_BREAK':
+      // セクションの区切り。回答を持たないので必須の設定も無い
+      return form.addPageBreakItem().setTitle(spec.title);
     default:
       throw new Error('未対応のフォーム設問タイプ: ' + spec.type + '（' + spec.title + '）');
   }
