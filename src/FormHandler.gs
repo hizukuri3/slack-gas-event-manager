@@ -67,14 +67,18 @@ function setupTriggers() {
  * FormApp.openById() は1回およそ1秒かかるが、この関数はセットアップと
  * シート編集トリガーからしか呼ばれず、Slackの3秒ルールの外にある。
  */
-function applyFormHints_(formId, vcRoomChoices) {
+function applyFormHints_(formId, vcRoomChoices, displayTitle) {
   const form = FormApp.openById(formId);
+  form.setTitle(displayTitle);
+  const sectioned = applyFormSections_(form);
+
   form.getItems().forEach(function (item) {
     const title = item.getTitle();
 
     if (title === FORM_TITLES.FORMAT) {
-      setChoicesIfMultipleChoice_(item, EVENT_FORMAT_VALUES);
-      // 「URLの入力が要る形式」は会場の設問側で伝えるので、ここでは繰り返さない
+      // セクションがあれば選択肢は applyFormSections_ が行き先付きで貼っている。
+      // ここで値だけ貼り直すと行き先が消えるので、無いときだけ貼る
+      if (!sectioned) setChoicesIfMultipleChoice_(item, EVENT_FORMAT_VALUES);
       item.setHelpText(
         EVENT_FORMATS.DISCORD + ' と ' + EVENT_FORMATS.MEET + ' は会場URLが自動で入ります。\n' +
         EVENT_FORMATS.MEET + ' は60分で切れるため、長いイベントは1時間ごとに別のURLになります。'
@@ -85,19 +89,93 @@ function applyFormHints_(formId, vcRoomChoices) {
       if (vcRoomChoices && vcRoomChoices.length > 0) {
         setChoicesIfMultipleChoice_(item, vcRoomChoices);
       }
+      // セクションが無い古いフォームでは全員に見えるので、対象の形式を添える
       item.setHelpText(
-        EVENT_FORMATS.DISCORD + ' のときだけ選んでください。' +
+        (sectioned ? '' : EVENT_FORMATS.DISCORD + ' のときだけ選んでください。') +
         '特に希望がなければ「' + VC_ROOM_AUTO + '」で大丈夫です。'
       );
     }
 
     if (title === FORM_TITLES.LOCATION) {
-      item.setHelpText(
-        '「' + EVENT_FORMATS.OTHER_ONLINE + '」「' + EVENT_FORMATS.OFFLINE +
-        '」のときだけ入力してください。'
-      );
+      item.setHelpText(sectioned
+        ? 'オンラインなら参加用のURL、対面なら場所を入力してください。'
+        : '「' + EVENT_FORMATS.OTHER_ONLINE + '」「' + EVENT_FORMATS.OFFLINE +
+          '」のときだけ入力してください。');
     }
   });
+}
+
+/**
+ * 開催形式の回答で、次に進むセクションを切り替える（行き先は FORM_SECTIONS のコメント参照）。
+ * Discord VC を選んだ人にだけ「VC部屋」、URLや場所が要る形式の人にだけ
+ * 「会場のURLまたは場所」を見せ、それぞれ必須にする。
+ *
+ * 行き先はフォーム上の設定なので、選択肢を setChoiceValues で貼り直すと消える。
+ * 選択肢はここで行き先付きで作り直す。
+ *
+ * セクションか設問が1つでも見つからなければ何もしない（false を返す）。
+ * 中途半端に行き先を付けると、設問を飛ばしたり、見えない設問が必須で
+ * 送信できなくなったりするため。VC部屋・会場は任意のままにしておく。
+ *
+ * @return {boolean} セクションの切り替えを設定できたか
+ */
+function applyFormSections_(form) {
+  const format = findFormItemByTitle_(form, FORM_TITLES.FORMAT);
+  const vcRoom = findFormItemByTitle_(form, FORM_TITLES.VC_ROOM);
+  const location = findFormItemByTitle_(form, FORM_TITLES.LOCATION);
+  const vcSection = findPageBreakByTitle_(form, FORM_SECTIONS.VC_ROOM);
+  const venueSection = findPageBreakByTitle_(form, FORM_SECTIONS.VENUE);
+  const detailsSection = findPageBreakByTitle_(form, FORM_SECTIONS.DETAILS);
+  if (!format || format.getType() !== FormApp.ItemType.MULTIPLE_CHOICE ||
+      !vcRoom || !location || !vcSection || !venueSection || !detailsSection) {
+    return false;
+  }
+  // 並びが崩れていると、行き先の先に別の設問が混ざる。運営が手で動かした場合は触らない
+  if (!(format.getIndex() < vcSection.getIndex() &&
+        vcSection.getIndex() < vcRoom.getIndex() &&
+        vcRoom.getIndex() < venueSection.getIndex() &&
+        venueSection.getIndex() < location.getIndex() &&
+        location.getIndex() < detailsSection.getIndex())) {
+    console.warn('フォームのセクションの並びが定義と違うため、開催形式による切り替えを設定しませんでした (' +
+      form.getId() + ')');
+    return false;
+  }
+
+  const destinations = {};
+  destinations[EVENT_FORMATS.DISCORD] = vcSection;
+  destinations[EVENT_FORMATS.MEET] = detailsSection;
+  destinations[EVENT_FORMATS.OTHER_ONLINE] = venueSection;
+  destinations[EVENT_FORMATS.OFFLINE] = venueSection;
+  const formatItem = format.asMultipleChoiceItem();
+  formatItem.setChoices(EVENT_FORMAT_VALUES.map(function (value) {
+    return formatItem.createChoice(value, destinations[value]);
+  }));
+
+  // VC部屋のセクションを終えたら、会場のセクションを飛ばして内容へ進む。
+  // （このページ区切りの行き先＝ひとつ前のセクションを終えたときの行き先）
+  venueSection.setGoToPage(detailsSection);
+
+  // 通る人にしか見えないので、必須にしても他の形式の人の邪魔にならない
+  setRequiredIfPossible_(vcRoom, true);
+  setRequiredIfPossible_(location, true);
+  return true;
+}
+
+/** タイトルが一致するページ区切り（セクション）を返す（無ければ null） */
+function findPageBreakByTitle_(form, title) {
+  const item = findFormItemByTitle_(form, title);
+  if (!item || item.getType() !== FormApp.ItemType.PAGE_BREAK) return null;
+  return item.asPageBreakItem();
+}
+
+/** 必須の切り替えができる型なら切り替える（型が変わっていても止まらないように） */
+function setRequiredIfPossible_(item, required) {
+  switch (item.getType()) {
+    case FormApp.ItemType.MULTIPLE_CHOICE:
+      item.asMultipleChoiceItem().setRequired(required); break;
+    case FormApp.ItemType.TEXT:
+      item.asTextItem().setRequired(required); break;
+  }
 }
 
 /**
@@ -125,7 +203,7 @@ function syncVcRoomChoices() {
   let failed = 0;
   formIds.forEach(function (formId) {
     try {
-      applyFormHints_(formId, choices);
+      applyFormHints_(formId, choices, formDisplayTitle_(config, formId));
       formCount++;
     } catch (err) {
       // 片方のフォームが壊れていても、もう片方の反映は続ける
@@ -195,6 +273,16 @@ function formIds_(config) {
     ids.push(config.masterFormId);
   }
   return ids.filter(function (id) { return Boolean(id); });
+}
+
+/**
+ * フォームIDに対応する表示タイトル。師匠用フォームだけ師匠向けにする。
+ * 弟子用と同じIDが師匠用にも入っている場合は、formIds_ と同じく弟子用として扱う
+ */
+function formDisplayTitle_(config, formId) {
+  return formId === config.masterFormId && formId !== config.formId
+    ? FORM_DISPLAY_TITLES.MASTER
+    : FORM_DISPLAY_TITLES.DISCIPLE;
 }
 
 /** VC部屋の同期結果を、操作した人へトーストで知らせる（師匠リストと同じ流儀） */
