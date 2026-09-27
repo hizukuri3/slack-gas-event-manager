@@ -67,9 +67,9 @@ function setupTriggers() {
  * FormApp.openById() は1回およそ1秒かかるが、この関数はセットアップと
  * シート編集トリガーからしか呼ばれず、Slackの3秒ルールの外にある。
  */
-function applyFormHints_(formId, vcRoomChoices) {
+function applyFormHints_(formId, vcRoomChoices, displayTitle) {
   const form = FormApp.openById(formId);
-  form.setTitle(FORM_DISPLAY_TITLE);
+  form.setTitle(displayTitle);
   const sectioned = applyFormSections_(form);
 
   form.getItems().forEach(function (item) {
@@ -203,7 +203,7 @@ function syncVcRoomChoices() {
   let failed = 0;
   formIds.forEach(function (formId) {
     try {
-      applyFormHints_(formId, choices);
+      applyFormHints_(formId, choices, formDisplayTitle_(config, formId));
       formCount++;
     } catch (err) {
       // 片方のフォームが壊れていても、もう片方の反映は続ける
@@ -273,6 +273,16 @@ function formIds_(config) {
     ids.push(config.masterFormId);
   }
   return ids.filter(function (id) { return Boolean(id); });
+}
+
+/**
+ * フォームIDに対応する表示タイトル。師匠用フォームだけ師匠向けにする。
+ * 弟子用と同じIDが師匠用にも入っている場合は、formIds_ と同じく弟子用として扱う
+ */
+function formDisplayTitle_(config, formId) {
+  return formId === config.masterFormId && formId !== config.formId
+    ? FORM_DISPLAY_TITLES.MASTER
+    : FORM_DISPLAY_TITLES.DISCIPLE;
 }
 
 /** VC部屋の同期結果を、操作した人へトーストで知らせる（師匠リストと同じ流儀） */
