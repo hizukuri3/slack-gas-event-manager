@@ -226,17 +226,32 @@ const EVENT_FORMAT_VALUES = [
 // 未回答は assignVcRoom_ が「おまかせ」と同じ扱いにする。
 const VC_ROOM_AUTO = 'おまかせ';
 
+// ---- プログラム名（期の名前）----
+// 生成物のファイル名・カレンダー名・フォームの表示タイトルの先頭に付く。
+// 期ごとに変わるので、新しい期へ引き継ぐときはここを直してから bootstrap() する
+const PROGRAM_NAME = 'DATA Saber - Bridge 2026.11';
+
+// ---- bootstrap() が作る生成物の名前 ----
+// 運営しか見ないもの（管理用・フォーム）は用途を先頭に置き、Driveの一覧で
+// すぐ見分けられるようにする。メンバーが直接見るもの（公開用・カレンダー）には
+// 「（公開用）」のような運営側の区別を付けない。名前が付くのは作成時だけで、
+// あとから Drive で名前を変えても動作には影響しない（コードはIDで開く）
+const RESOURCE_NAMES = {
+  MANAGEMENT_SPREADSHEET: '（運営用）' + PROGRAM_NAME + ' 運営データ',
+  PUBLIC_SPREADSHEET: PROGRAM_NAME + ' イベント一覧',
+  DISCIPLE_FORM: '（弟子用）' + PROGRAM_NAME + ' イベント登録',
+  MASTER_FORM: '（師匠用）' + PROGRAM_NAME + ' イベント登録',
+  CALENDAR: PROGRAM_NAME + ' イベント'
+};
+
 // ---- フォームの表示タイトル ----
 // 回答者に見えるフォーム上部のタイトル。どちらのフォームを開いているかが
 // 回答者にも分かるよう、弟子か師匠かを入れる。
-// Driveのファイル名（「イベント登録フォーム（弟子用）」など）は運営が
-// 見分けるためのもので、こちらとは別に持つ。setupTriggers() で稼働中の
-// フォームにも反映される。
-// 先頭のプログラム名は期ごとに変わるので、新しい期へ引き継ぐときはここを直す
-const FORM_TITLE_PROGRAM = 'DATA Saber - Bridge 2026.11';
+// Driveのファイル名（RESOURCE_NAMES）とは別物。setupTriggers() で稼働中の
+// フォームにも反映される
 const FORM_DISPLAY_TITLES = {
-  DISCIPLE: FORM_TITLE_PROGRAM + ' イベント登録（弟子）',
-  MASTER: FORM_TITLE_PROGRAM + ' イベント登録（師匠）'
+  DISCIPLE: PROGRAM_NAME + ' イベント登録（弟子）',
+  MASTER: PROGRAM_NAME + ' イベント登録（師匠）'
 };
 
 // ---- フォームのセクション（ページ区切り）のタイトル ----

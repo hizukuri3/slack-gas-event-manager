@@ -57,33 +57,29 @@ function formSpec_() {
 
 /**
  * 新しい期の初期構築（手動実行）。
- * COHORT_NAME（任意）を入れておくと生成ファイル名の接頭辞になる（例: Bridge2027.03）。
+ * 生成物の名前は Config.gs の RESOURCE_NAMES（先頭に PROGRAM_NAME が付く）で決まる。
  * 実行後、作成物はマイドライブにあるので、手動で共有ドライブの目的フォルダへ移動すること。
  */
 function bootstrap() {
   const scriptProps = PropertiesService.getScriptProperties();
-  const cohort = String(scriptProps.getProperty('COHORT_NAME') || '').trim();
-  const prefix = cohort ? cohort + ' ' : '';
   const logs = [];
 
   // ---- 1. スプレッドシート（管理用・公開用）----
   ensureResource_(scriptProps, logs, 'MANAGEMENT_SPREADSHEET_ID',
-    function () { return createSpreadsheet_(prefix + '運営データ（管理用）'); });
+    function () { return createSpreadsheet_(RESOURCE_NAMES.MANAGEMENT_SPREADSHEET); });
   ensureResource_(scriptProps, logs, 'PUBLIC_SPREADSHEET_ID',
-    function () { return createSpreadsheet_(prefix + 'イベント一覧（公開用）'); });
+    function () { return createSpreadsheet_(RESOURCE_NAMES.PUBLIC_SPREADSHEET); });
 
   // ---- 2. フォーム（弟子用・師匠用。設問構成は共通）----
   ensureResource_(scriptProps, logs, 'GOOGLE_FORM_ID',
-    function () { return createEventForm_(prefix + 'イベント登録フォーム（弟子用）',
-      FORM_DISPLAY_TITLES.DISCIPLE); });
+    function () { return createEventForm_(RESOURCE_NAMES.DISCIPLE_FORM, FORM_DISPLAY_TITLES.DISCIPLE); });
   ensureResource_(scriptProps, logs, 'MASTER_FORM_ID',
-    function () { return createEventForm_(prefix + 'イベント登録フォーム（師匠用）',
-      FORM_DISPLAY_TITLES.MASTER); });
+    function () { return createEventForm_(RESOURCE_NAMES.MASTER_FORM, FORM_DISPLAY_TITLES.MASTER); });
 
   // ---- 3. イベント用カレンダー（Driveファイルではない）----
   ensureResource_(scriptProps, logs, 'GOOGLE_CALENDAR_ID',
     function () {
-      const cal = CalendarApp.createCalendar(prefix + 'イベント', { timeZone: 'Asia/Tokyo' });
+      const cal = CalendarApp.createCalendar(RESOURCE_NAMES.CALENDAR, { timeZone: 'Asia/Tokyo' });
       return cal.getId();
     });
 
