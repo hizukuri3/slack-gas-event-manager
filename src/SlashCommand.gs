@@ -18,8 +18,8 @@
 function handleSlashCommand_(params) {
   const config = getConfig_();
 
-  // 簡易検証：Verification Token の照合（設定されている場合のみ）
-  if (config.slackVerificationToken && params.token !== config.slackVerificationToken) {
+  // 簡易検証：Verification Token の照合（getConfig_ が必須にしているので常に行う）
+  if (params.token !== config.slackVerificationToken) {
     return slashResponse_(':warning: 検証に失敗しました。');
   }
 

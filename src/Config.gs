@@ -1,4 +1,3 @@
-// ci: deploy test
 /**
  * Config.gs
  * スクリプトプロパティから設定値を読み込む。
@@ -280,7 +279,10 @@ function getConfig_() {
   const props = PropertiesService.getScriptProperties().getProperties();
   const config = {
     slackBotToken: props['SLACK_BOT_TOKEN'] || null,               // 例: YOUR_SLACK_BOT_TOKEN
-    slackVerificationToken: props['SLACK_VERIFICATION_TOKEN'] || null, // Slack Event検証用（任意だが推奨）
+    // Slackから届いたリクエストかを確かめる照合用（必須）。
+    // Webアプリは匿名アクセス可で、/exec URLは参加者確認リンクとして告知・公開カレンダーに
+    // 載るため、照合しないと誰でもボタン押下や /event を偽装できる
+    slackVerificationToken: props['SLACK_VERIFICATION_TOKEN'] || null,
     managementSpreadsheetId: props['MANAGEMENT_SPREADSHEET_ID'] || null, // 例: MANAGEMENT_SPREADSHEET_ID
     publicSpreadsheetId: props['PUBLIC_SPREADSHEET_ID'] || null,   // 例: PUBLIC_SPREADSHEET_ID
     calendarId: props['GOOGLE_CALENDAR_ID'] || null,               // 例: GOOGLE_CALENDAR_ID
@@ -320,8 +322,8 @@ function getConfig_() {
   };
 
   const required = [
-    'SLACK_BOT_TOKEN', 'MANAGEMENT_SPREADSHEET_ID', 'PUBLIC_SPREADSHEET_ID',
-    'GOOGLE_CALENDAR_ID', 'SLACK_CHANNEL_ID', 'GOOGLE_FORM_ID'
+    'SLACK_BOT_TOKEN', 'SLACK_VERIFICATION_TOKEN', 'MANAGEMENT_SPREADSHEET_ID',
+    'PUBLIC_SPREADSHEET_ID', 'GOOGLE_CALENDAR_ID', 'SLACK_CHANNEL_ID', 'GOOGLE_FORM_ID'
   ];
   const missing = required.filter(function (key) { return !props[key]; });
   if (missing.length > 0) {

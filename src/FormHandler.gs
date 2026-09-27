@@ -226,6 +226,7 @@ function syncVcRoomChoices() {
  *
  * 稼働中のインスタンスで設問を増やしたときの唯一の追随経路。フォームを作り直すと
  * 主催者が持っている回答編集URLがすべて無効になるため、作り直しは避けたい。
+ * あわせて、回答の編集許可などのフォーム設定もそろえる（applyFormSettings_）。
  *
  * @return {{added: string[], formCount: number, failed: number}}
  */
@@ -242,7 +243,9 @@ function syncFormItems() {
 
   formIds_(config).forEach(function (formId) {
     try {
-      const result = ensureFormItems_(FormApp.openById(formId));
+      const form = FormApp.openById(formId);
+      applyFormSettings_(form);
+      const result = ensureFormItems_(form);
       collect(renamed, result.renamed);
       collect(added, result.added);
       formCount++;
@@ -309,7 +312,16 @@ function onFormSubmit(e) {
     e.source.getId() === config.masterFormId;
 
   const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
+  try {
+    lock.waitLock(30000);
+  } catch (err) {
+    // 取れないまま例外で抜けると、送信は誰にも知らされずに失われる。
+    // 主催者へ編集用URL付きで知らせ、送り直してもらう
+    console.warn('フォーム送信のロック取得に失敗しました: ' + responseId);
+    notifyFormError_(config, formResponse,
+      ['ただいま混み合っていて処理できませんでした。少し時間をおいて、そのまま再送信してください。']);
+    return;
+  }
   try {
     // 1. 回答の取り出し（日時の解釈に失敗したら主催者へDMで通知して終了）
     let answers;

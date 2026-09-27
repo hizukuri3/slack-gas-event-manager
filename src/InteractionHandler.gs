@@ -53,8 +53,8 @@ function handleInteraction_(payload) {
 
   const config = getConfig_();
 
-  // 簡易検証：Verification Token の照合（設定されている場合のみ）
-  if (config.slackVerificationToken && payload.token !== config.slackVerificationToken) {
+  // 簡易検証：Verification Token の照合（getConfig_ が必須にしているので常に行う）
+  if (payload.token !== config.slackVerificationToken) {
     return;
   }
 
