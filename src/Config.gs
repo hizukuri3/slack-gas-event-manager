@@ -231,10 +231,12 @@ const VC_ROOM_AUTO = 'おまかせ';
 // 回答者にも分かるよう、弟子か師匠かを入れる。
 // Driveのファイル名（「イベント登録フォーム（弟子用）」など）は運営が
 // 見分けるためのもので、こちらとは別に持つ。setupTriggers() で稼働中の
-// フォームにも反映される
+// フォームにも反映される。
+// 先頭のプログラム名は期ごとに変わるので、新しい期へ引き継ぐときはここを直す
+const FORM_TITLE_PROGRAM = 'DATA Saber - Bridge 2026.11';
 const FORM_DISPLAY_TITLES = {
-  DISCIPLE: 'イベント登録（弟子）',
-  MASTER: 'イベント登録（師匠）'
+  DISCIPLE: FORM_TITLE_PROGRAM + ' イベント登録（弟子）',
+  MASTER: FORM_TITLE_PROGRAM + ' イベント登録（師匠）'
 };
 
 // ---- フォームのセクション（ページ区切り）のタイトル ----
