@@ -239,6 +239,14 @@ const FORM_DISPLAY_TITLES = {
   MASTER: FORM_TITLE_PROGRAM + ' イベント登録（師匠）'
 };
 
+// bootstrap() がフォームを作るときのDriveのファイル名（運営が見分ける用）。
+// 用途を先頭に置き、Driveの一覧で弟子用・師匠用がすぐ分かるようにする。
+// 期の名前は表示タイトルと同じ FORM_TITLE_PROGRAM から取る（COHORT_NAME は使わない）
+const FORM_FILE_NAMES = {
+  DISCIPLE: '（弟子用）' + FORM_TITLE_PROGRAM + ' イベント登録',
+  MASTER: '（師匠用）' + FORM_TITLE_PROGRAM + ' イベント登録'
+};
+
 // ---- フォームのセクション（ページ区切り）のタイトル ----
 // 開催形式の回答で、次に進むセクションを切り替える（applyFormSections_）:
 //   Discord VC          → VC_ROOM（部屋を選ぶ）→ DETAILS

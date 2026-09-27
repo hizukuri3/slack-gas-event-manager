@@ -57,7 +57,8 @@ function formSpec_() {
 
 /**
  * 新しい期の初期構築（手動実行）。
- * COHORT_NAME（任意）を入れておくと生成ファイル名の接頭辞になる（例: Bridge2027.03）。
+ * COHORT_NAME（任意）を入れておくと、スプレッドシートのファイル名の接頭辞になる（例: Bridge2027.03）。
+ * フォームのファイル名は Config.gs の FORM_FILE_NAMES で決まる。
  * 実行後、作成物はマイドライブにあるので、手動で共有ドライブの目的フォルダへ移動すること。
  */
 function bootstrap() {
@@ -73,12 +74,11 @@ function bootstrap() {
     function () { return createSpreadsheet_(prefix + 'イベント一覧（公開用）'); });
 
   // ---- 2. フォーム（弟子用・師匠用。設問構成は共通）----
+  // ファイル名は COHORT_NAME ではなく FORM_FILE_NAMES（Config.gs）で決まる
   ensureResource_(scriptProps, logs, 'GOOGLE_FORM_ID',
-    function () { return createEventForm_(prefix + 'イベント登録フォーム（弟子用）',
-      FORM_DISPLAY_TITLES.DISCIPLE); });
+    function () { return createEventForm_(FORM_FILE_NAMES.DISCIPLE, FORM_DISPLAY_TITLES.DISCIPLE); });
   ensureResource_(scriptProps, logs, 'MASTER_FORM_ID',
-    function () { return createEventForm_(prefix + 'イベント登録フォーム（師匠用）',
-      FORM_DISPLAY_TITLES.MASTER); });
+    function () { return createEventForm_(FORM_FILE_NAMES.MASTER, FORM_DISPLAY_TITLES.MASTER); });
 
   // ---- 3. イベント用カレンダー（Driveファイルではない）----
   ensureResource_(scriptProps, logs, 'GOOGLE_CALENDAR_ID',
