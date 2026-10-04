@@ -13,7 +13,8 @@
  * スプレッドシート・フォームは実行者の「マイドライブ」直下に作られる。
  * 共有ドライブへ動かすのは Drive の画面上で手動で行う（プログラムは共有ドライブに触らない）。
  * Drive上でファイルを移動してもIDは変わらないため、保存済みのIDはそのまま有効。
- * この方針により drive スコープ・Drive高度サービスは不要（spreadsheets/forms スコープのみで動く）。
+ * この方針により bootstrap は drive スコープ・Drive高度サービスを使わない（spreadsheets/forms スコープのみで動く）。
+ * appsscript.json の drive.readonly は、クイズ問題の画像を読むためのもの（Quiz.gs）。
  *
  * カレンダーはDriveファイルではなく、実行者のカレンダー一覧に紐づく（移動の概念なし）。
  */
@@ -129,7 +130,7 @@ function bootstrap() {
     return;
   }
   setupTriggers(); // initializeSheets() / applyFormHints_() もこの中で実行される
-  logs.push('setupTriggers() 実行済み（シート初期化・フォーム送信/定期同期/師匠リスト編集トリガー・ヒント付与）');
+  logs.push('setupTriggers() 実行済み（シート初期化・フォーム送信/定期同期/師匠リスト編集/クイズ出題トリガー・ヒント付与）');
   logs.push('');
   logs.push('▼ 手動作業(4): 管理用スプレッドシートの「師匠リスト」シートに師匠を登録してください。');
   logs.push('  1行1人でSlackユーザーIDを書くだけです（編集した時点で自動反映されます）。');
@@ -139,6 +140,8 @@ function bootstrap() {
   logs.push('  一時VCを作るbot（TempVoice など）のハブチャンネルは登録しないでください。');
   logs.push('▼ 手動作業(6): Webアプリをデプロイし、/exec のURLを WEBAPP_URL に登録してください');
   logs.push('  （docs/SETUP.md 手順7）。');
+  logs.push('▼ 一問一答クイズを使う場合: 管理用スプレッドシートの「クイズ問題」シートに問題を貼り、');
+  logs.push('  「クイズ設定」シートの「投稿先チャンネル」を入れてください。入れるまでクイズは動きません。');
   logs.push('');
   logs.push('セットアップ完了。Slackで /event を打ってフォームリンクが返れば成功です。');
   console.log(logs.join('\n'));

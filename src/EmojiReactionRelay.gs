@@ -28,6 +28,15 @@ function handleSlackEvent_(body) {
   // ファイルやファイルコメントへのリアクションは転送対象外
   if (!event.item || event.item.type !== 'message') return;
 
+  // クイズの出題メッセージへのリアクション記録（Quiz.gs）。転送とは独立した機能で、
+  // 同じ絵文字が両方に設定されていれば両方が動く。クイズ側の失敗で転送まで
+  // 止めないよう、ここで受け止める
+  try {
+    handleQuizReaction_(config, event);
+  } catch (err) {
+    console.error('クイズのリアクション記録でエラー: ' + err);
+  }
+
   if (event.type === 'reaction_added') {
     handleReactionAdded_(config, event);
   } else if (event.type === 'reaction_removed') {

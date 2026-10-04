@@ -15,6 +15,10 @@ const SHEET_RELAY_LOG = '絵文字転送ログ';
 const SHEET_MASTER_LIST = '師匠リスト';
 // Discord VCの在庫台帳。管理用①にのみ作る（運用設定のため）
 const SHEET_VC_ROOMS = 'VCルームリスト';
+// 一問一答クイズ。管理用①にのみ作る（運用設定・内部ログのため）
+const SHEET_QUIZ_QUESTIONS = 'クイズ問題';
+const SHEET_QUIZ_SETTINGS = 'クイズ設定';
+const SHEET_QUIZ_LOG = 'クイズ回答ログ';
 
 // 人が編集するシートの「有効」列の見出し。
 // 空欄が有効を意味することを、シートを開いた人の目に入る場所で伝えるための文言。
@@ -148,6 +152,71 @@ const VC_ROOM_COL = {
 
 const VC_ROOM_HEADER = [
   'VC名', 'チャンネルURL', '定員（目安）', '所有者SlackユーザーID（任意）', ENABLED_HEADER, 'メモ'
+];
+
+// ---- クイズ問題の列定義（0始まり）----
+// 左の3列は運営が書き、右の3列はBotが書く。人が書く列とBotが書く列を
+// 1枚に同居させているのは、問題ごとに「出したか・なぜ飛ばしたか」を
+// 同じ行で見られるようにするため。
+// 出題順は行の並び順そのもの（シャッフルは運営が貼る前に済ませる）
+const QUIZ_COL = {
+  NUMBER: 0,     // 問題番号（例: Ord1-Q13）。見出しとクイズ回答ログの Ord No / Q No の元になる
+  TEXT: 1,       // 問題文
+  IMAGE: 2,      // 画像（DriveのファイルURLかファイルID）。空なら文字だけで出す
+  POSTED_AT: 3,  // 出題日時（Botが書く）
+  // 状態（Botが書く）。「出題済み」か、飛ばした理由。
+  // 何か入っている行は出題対象外。運営が問題を直したらここを消すと対象に戻る
+  STATUS: 4,
+  MESSAGE_TS: 5  // 出題メッセージのts（Botが書く。リアクションとの照合用）
+};
+
+const QUIZ_HEADER = [
+  '問題番号', '問題文', '画像（DriveのURLかID・任意）', '出題日時', '状態', 'SlackメッセージTS'
+];
+
+// 「状態」列で出題済みを表す値
+const QUIZ_STATUS_POSTED = '出題済み';
+
+// ---- クイズ設定の項目 ----
+// 人が編集するシート（項目 / 値 / 説明 の3列）。コードは項目名の完全一致で値を探す。
+// シートに無い項目は initializeSheets() が既定値つきで行を足す（既存の行は上書きしない）。
+// 投稿先チャンネルが空のあいだはクイズ機能全体がオフになる
+const QUIZ_SETTING_ITEMS = [
+  { key: 'CHANNEL', label: '投稿先チャンネル', value: '',
+    note: '#チャンネル名 かチャンネルID。空欄のあいだはクイズは動きません' },
+  { key: 'POST_HOUR', label: '投稿時刻', value: '9',
+    note: '0〜23（時）。その時台に1日1問出します' },
+  { key: 'SKIP_WEEKENDS', label: '土日は休む', value: 'はい',
+    note: 'はい / いいえ' },
+  { key: 'HEADER', label: '見出し', value: '*今日の一問一答（{number}）*',
+    note: '{number} が問題番号に置き換わります。空欄なら問題文だけ' },
+  { key: 'EMOJIS', label: '記録する絵文字', value: 'タブった, tabutta',
+    note: 'カンマ区切り。出題メッセージに付いたこの絵文字をクイズ回答ログに記録します' },
+  { key: 'BOT_NAME', label: 'Botの表示名', value: '',
+    note: '空欄ならいつものBot名で投稿します' },
+  { key: 'BOT_ICON', label: 'Botのアイコン', value: '',
+    note: ':絵文字名: か画像のURL。空欄ならいつものアイコン' }
+];
+
+const QUIZ_SETTINGS_HEADER = ['項目', '値', '説明'];
+const QUIZ_SKIP_WEEKENDS_CHOICES = ['はい', 'いいえ'];
+
+// ---- クイズ回答ログの列定義（0始まり）----
+// システムが書くシート。1人×1問×1絵文字で1行。外されたら削除日時を埋める（行は消さない）
+const QUIZ_LOG_COL = {
+  ADDED_AT: 0,    // 追加日時（Slackのイベント時刻）
+  REMOVED_AT: 1,  // 削除日時。空なら今もリアクション中
+  USER: 2,        // SlackユーザーID
+  EMOJI: 3,       // 絵文字名
+  NUMBER: 4,      // 問題番号
+  ORD_NO: 5,      // 問題番号の「Ord◯」の数字（取り出せなければ空）
+  Q_NO: 6,        // 問題番号の「Q◯」の数字（取り出せなければ空）
+  POSTED_AT: 7,   // 出題日時
+  MESSAGE_TS: 8   // 出題メッセージのts
+};
+
+const QUIZ_LOG_HEADER = [
+  '追加日時', '削除日時', 'ユーザーID', '絵文字', '問題番号', 'Ord No', 'Q No', '出題日時', 'メッセージTS'
 ];
 
 // 「有効」列のドロップダウンの選択肢。先頭が既定値（空欄と同じ意味）。
