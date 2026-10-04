@@ -134,6 +134,43 @@ function getReactedMessage_(config, channel, ts) {
 }
 
 /**
+ * ファイルを Slack へアップロードし、ファイルIDを返す（チャンネルには出さない）。失敗時は null。
+ * 返したIDは chat.postMessage の image ブロック（slack_file）で参照して使う。
+ *
+ * files.getUploadURLExternal はフォーム形式（x-www-form-urlencoded）しか受け付けないため、
+ * JSON 専用の callSlackApi_ は使わず個別に呼ぶ。
+ */
+function uploadFileWithoutSharing_(config, blob) {
+  const filename = blob.getName() || 'image.png';
+  const urlResponse = UrlFetchApp.fetch('https://slack.com/api/files.getUploadURLExternal', {
+    method: 'post',
+    headers: { Authorization: 'Bearer ' + config.slackBotToken },
+    payload: { filename: filename, length: String(blob.getBytes().length) },
+    muteHttpExceptions: true
+  });
+  const urlJson = JSON.parse(urlResponse.getContentText());
+  if (!urlJson.ok) {
+    console.warn('Slack API error: files.getUploadURLExternal -> ' + urlJson.error);
+    return null;
+  }
+
+  const uploadResponse = UrlFetchApp.fetch(urlJson.upload_url, {
+    method: 'post',
+    payload: { file: blob },
+    muteHttpExceptions: true
+  });
+  if (uploadResponse.getResponseCode() !== 200) {
+    console.warn('ファイルのアップロードに失敗しました: HTTP ' + uploadResponse.getResponseCode());
+    return null;
+  }
+
+  const completed = callSlackApi_(config, 'files.completeUploadExternal', {
+    files: [{ id: urlJson.file_id, title: filename }]
+  });
+  return completed.ok ? urlJson.file_id : null;
+}
+
+/**
  * チャンネル名（#archive / archive）をチャンネルIDへ変換する。
  * マッピングシートを人が読み書きしやすくするためチャンネル名で書けるようにしているが、
  * Slack API はIDしか受け付けないためここで解決する。

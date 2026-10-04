@@ -165,7 +165,7 @@ function initializeSheets() {
     protectSystemSheet_(participants);
   });
 
-  // 次の4シートは管理用①にのみ作る。
+  // 以降のシートは管理用①にのみ作る。
   // イベントの参加状況とは無関係な運用設定・内部ログなので公開用②へは出さない。
   const management = SpreadsheetApp.openById(config.managementSpreadsheetId);
   const relayMapping = getOrCreateSheet_(management, SHEET_RELAY_MAPPING, RELAY_MAPPING_HEADER);
@@ -174,6 +174,13 @@ function initializeSheets() {
   // Discord VCの在庫台帳。空のままでも他の機能には影響しない
   // （開催形式でDiscord VCを選んだときだけ参照される）
   const vcRooms = getOrCreateSheet_(management, SHEET_VC_ROOMS, VC_ROOM_HEADER);
+  // 一問一答クイズ。「クイズ設定」の投稿先チャンネルを入れるまでは動かないので、
+  // クイズを使わない期でも作っておくだけで害はない
+  getOrCreateSheet_(management, SHEET_QUIZ_QUESTIONS, QUIZ_HEADER);
+  ensureQuizSettingRows_(getOrCreateSheet_(management, SHEET_QUIZ_SETTINGS, QUIZ_SETTINGS_HEADER));
+  const quizLog = getOrCreateSheet_(management, SHEET_QUIZ_LOG, QUIZ_LOG_HEADER);
+  ensureHeader_(quizLog, QUIZ_LOG_HEADER);
+  protectSystemSheet_(quizLog);
 
   // 「有効」列を持つ人編集シートは、編集トリガー経由でしか整えられないため
   // ここで一度通しておく。でないと、誰かがそのシートを編集するまで

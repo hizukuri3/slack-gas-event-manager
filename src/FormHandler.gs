@@ -12,10 +12,16 @@ function setupTriggers() {
     const handler = trigger.getHandlerFunction();
     if (handler === 'onFormSubmit' || handler === 'syncPublicSheets' ||
         handler === 'onManagementSpreadsheetEdit' ||
-        handler === 'onManagementSpreadsheetChange') {
+        handler === 'onManagementSpreadsheetChange' || handler === 'postDailyQuiz') {
       ScriptApp.deleteTrigger(trigger);
     }
   });
+  // 一問一答クイズの出題（毎時）。投稿時刻はクイズ設定シートで判定するので、
+  // 時刻を変えてもトリガーの登録し直しは要らない。投稿先チャンネルが空なら即終了する
+  ScriptApp.newTrigger('postDailyQuiz')
+    .timeBased()
+    .everyHours(1)
+    .create();
   // 公開用シートへの参加者リスト定期同期（5分毎）
   ScriptApp.newTrigger('syncPublicSheets')
     .timeBased()
