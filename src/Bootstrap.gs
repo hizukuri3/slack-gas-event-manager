@@ -142,6 +142,7 @@ function bootstrap() {
   logs.push('  （docs/SETUP.md 手順7）。');
   logs.push('▼ 一問一答クイズを使う場合: 管理用スプレッドシートの「クイズ問題」シートに問題を貼り、');
   logs.push('  「クイズ設定」シートの「投稿先チャンネル」を入れてください。入れるまでクイズは動きません。');
+  logs.push('  そのチャンネルにはBotを招待してください（招待しないと、出題はされてもスタンプが記録されません）。');
   logs.push('');
   logs.push('セットアップ完了。Slackで /event を打ってフォームリンクが返れば成功です。');
   console.log(logs.join('\n'));

@@ -183,7 +183,8 @@ const QUIZ_STATUS_POSTED = '出題済み';
 // 投稿先チャンネルが空のあいだはクイズ機能全体がオフになる
 const QUIZ_SETTING_ITEMS = [
   { key: 'CHANNEL', label: '投稿先チャンネル', value: '',
-    note: '#チャンネル名 かチャンネルID。空欄のあいだはクイズは動きません' },
+    note: '#チャンネル名 かチャンネルID。空欄のあいだはクイズは動きません。' +
+      'Botをこのチャンネルに招待してください（招待しないとスタンプが記録されません）' },
   { key: 'POST_HOUR', label: '投稿時刻', value: '9',
     note: '0〜23（時）。その時台に1日1問出します' },
   { key: 'SKIP_WEEKENDS', label: '土日は休む', value: 'はい',
