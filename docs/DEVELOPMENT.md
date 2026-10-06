@@ -106,6 +106,7 @@ clone したディレクトリで、GASプロジェクトと橋渡しする clas
 - `InteractionHandler.gs` … Slackボタン押下の処理（予約・キャンセル・定員・繰り上げ）。
 - `Repository.gs` … スプレッドシート読み書き（管理用・公開用のミラーリング）。
 - `Quiz.gs` … 一問一答クイズ。毎時トリガーで「投稿時刻を過ぎていて今日まだ出していなければ出す」と判定する。リアクションは `EmojiReactionRelay.gs` の `handleSlackEvent_` から、絵文字転送とは独立に呼ばれる。
+- `VizReview.gs` … ナイスチャレンジ。フォーム送信は `onFormSubmit` の先頭で `handleVizFormSubmit_` が送信元フォームを見て振り分ける（ナイスチャレンジ用フォームのIDは「ナイスチャレンジ設定」シートが正で、プロパティには持たない。編集トリガーが送信トリガーを追随させる）。スタンプは `handleSlackEvent_` から、返信（`message` イベント）も同じ入口から呼ばれる。メールは投稿者の特定にだけ使い、ログ・シートに書かない。フォームの回答は「ナイスチャレンジ設定」の日数だけ残し（編集URLをDM→編集は同じ回答IDで `onFormSubmit` が再度走り、`chat.update` で投稿を更新）、`cleanupVizResponses`（毎日）が期限切れを削除する。
 - `MasterList.gs` … 師匠リスト（管理用①のシート）→ スクリプトプロパティへの反映。シートが正で、プロパティは `/event` を3秒ルール内に収めるための読み取り用キャッシュ。
 
 アーキテクチャ全体像とデータ構造は [README](../README.md) にあります。
