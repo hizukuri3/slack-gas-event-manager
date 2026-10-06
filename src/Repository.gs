@@ -100,6 +100,15 @@ function onManagementSpreadsheetEdit(e) {
     notifyMasterListSync_(e.source, syncMasterList());
     return;
   }
+  if (name === SHEET_VIZ_SETTINGS) {
+    // フォームIDが変わったら、送信トリガーと投稿項目をその場で追随させる
+    syncVizSettings_(e.source);
+    return;
+  }
+  if (name === SHEET_VIZ_FIELDS) {
+    setupEnabledColumn_(e.range.getSheet(), VIZ_FIELD_COL.ENABLED);
+    return;
+  }
   if (name === SHEET_RELAY_MAPPING) {
     // 転送マッピングはリアクションの都度シートを直接読むので反映処理は不要。
     // 入力規則だけ師匠リストと揃える（トーストは出さない。
@@ -181,6 +190,9 @@ function initializeSheets() {
   const quizLog = getOrCreateSheet_(management, SHEET_QUIZ_LOG, QUIZ_LOG_HEADER);
   ensureHeader_(quizLog, QUIZ_LOG_HEADER);
   protectSystemSheet_(quizLog);
+
+  // ナイスチャレンジ。フォームIDと投稿先チャンネルを入れるまでは動かない
+  setupVizReview_(config);
 
   // 「有効」列を持つ人編集シートは、編集トリガー経由でしか整えられないため
   // ここで一度通しておく。でないと、誰かがそのシートを編集するまで

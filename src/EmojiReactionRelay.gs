@@ -25,6 +25,18 @@ function handleSlackEvent_(body) {
   }
 
   const event = body.event || {};
+
+  // スレッド返信（ナイスチャレンジの記録）。message イベントには item が無いので、
+  // リアクションの判定より前に受ける。ここで返し、転送の処理には進まない
+  if (event.type === 'message') {
+    try {
+      handleVizReply_(config, event);
+    } catch (err) {
+      console.error('ナイスチャレンジの返信記録でエラー: ' + err);
+    }
+    return;
+  }
+
   // ファイルやファイルコメントへのリアクションは転送対象外
   if (!event.item || event.item.type !== 'message') return;
 
@@ -35,6 +47,13 @@ function handleSlackEvent_(body) {
     handleQuizReaction_(config, event);
   } catch (err) {
     console.error('クイズのリアクション記録でエラー: ' + err);
+  }
+
+  // ナイスチャレンジの投稿へのスタンプ記録（VizReview.gs）。これも独立した機能
+  try {
+    handleVizReaction_(config, event);
+  } catch (err) {
+    console.error('ナイスチャレンジのスタンプ記録でエラー: ' + err);
   }
 
   if (event.type === 'reaction_added') {

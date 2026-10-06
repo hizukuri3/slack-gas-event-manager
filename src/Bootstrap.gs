@@ -77,6 +77,16 @@ function bootstrap() {
   ensureResource_(scriptProps, logs, 'MASTER_FORM_ID',
     function () { return createEventForm_(RESOURCE_NAMES.MASTER_FORM, FORM_DISPLAY_TITLES.MASTER); });
 
+  // ---- 2b. ナイスチャレンジ用フォーム（「ナイスチャレンジ設定」のフォーム欄が空のときだけ作る。既存のフォームを使うなら先にIDを書く）----
+  // 設定の置き場は管理用シートなので、シートの項目が足されるここまで来てから作る。
+  // Slack系プロパティが未設定でもシートは開けるので、setupTriggers より前に回してよい
+  const vizConfig = {
+    managementSpreadsheetId: scriptProps.getProperty('MANAGEMENT_SPREADSHEET_ID'),
+    formId: scriptProps.getProperty('GOOGLE_FORM_ID'),
+    masterFormId: scriptProps.getProperty('MASTER_FORM_ID')
+  };
+  logs.push(ensureVizForm_(vizConfig));
+
   // ---- 3. イベント用カレンダー（Driveファイルではない）----
   ensureResource_(scriptProps, logs, 'GOOGLE_CALENDAR_ID',
     function () {
@@ -96,6 +106,7 @@ function bootstrap() {
   logs.push('  イベント一覧（公開用）: ' + spreadsheetUrl_(created['PUBLIC_SPREADSHEET_ID']));
   logs.push('  弟子用フォーム        : ' + formEditUrl_(created['GOOGLE_FORM_ID']));
   logs.push('  師匠用フォーム        : ' + formEditUrl_(created['MASTER_FORM_ID']));
+  logs.push('  ナイスチャレンジ用フォーム         : ' + formEditUrl_(readVizFormIdForLog_(created['MANAGEMENT_SPREADSHEET_ID'])));
   logs.push('  カレンダー設定        : ' + calendarSettingsUrl_(created['GOOGLE_CALENDAR_ID']));
 
   // ---- 手動作業の案内 ----
@@ -142,6 +153,10 @@ function bootstrap() {
   logs.push('  （docs/SETUP.md 手順7）。');
   logs.push('▼ 一問一答クイズを使う場合: 管理用スプレッドシートの「クイズ問題」シートに問題を貼り、');
   logs.push('  「クイズ設定」シートの「投稿先チャンネル」を入れてください。入れるまでクイズは動きません。');
+  logs.push('▼ ナイスチャレンジを使う場合: 管理用スプレッドシートの「ナイスチャレンジ設定」シートの「投稿先チャンネル」を入れてください。');
+  logs.push('  入れるまでは動きません。そのチャンネルにはBotを招待してください（スタンプと返信が記録されません）。');
+  logs.push('  フォームは「ナイスチャレンジ設定」に書かれたもの（上のログのURL）です。既存のフォームを使うなら、そのURLに書き換えます。');
+  logs.push('  フォームでは、Slackに登録しているメールアドレスを集めてください（「メールアドレスを収集する」設定でも、入力する設問でも構いません）。');
   logs.push('');
   logs.push('セットアップ完了。Slackで /event を打ってフォームリンクが返れば成功です。');
   console.log(logs.join('\n'));
