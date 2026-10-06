@@ -12,7 +12,8 @@ function setupTriggers() {
     const handler = trigger.getHandlerFunction();
     if (handler === 'onFormSubmit' || handler === 'syncPublicSheets' ||
         handler === 'onManagementSpreadsheetEdit' ||
-        handler === 'onManagementSpreadsheetChange' || handler === 'postDailyQuiz') {
+        handler === 'onManagementSpreadsheetChange' || handler === 'postDailyQuiz' ||
+        handler === 'cleanupVizResponses') {
       ScriptApp.deleteTrigger(trigger);
     }
   });
@@ -21,6 +22,12 @@ function setupTriggers() {
   ScriptApp.newTrigger('postDailyQuiz')
     .timeBased()
     .everyHours(1)
+    .create();
+  // ナイスチャレンジ：期限を過ぎたフォームの回答を削除する（毎日。使っていなければ即終了する）
+  ScriptApp.newTrigger('cleanupVizResponses')
+    .timeBased()
+    .everyDays(1)
+    .atHour(4)
     .create();
   // 公開用シートへの参加者リスト定期同期（5分毎）
   ScriptApp.newTrigger('syncPublicSheets')
@@ -54,6 +61,8 @@ function setupTriggers() {
   // 師匠リストシートの内容をプロパティへ反映する。
   // プロパティで師匠を管理していた既存インスタンスは、ここで初回移行が走る
   syncMasterList();
+  // ナイスチャレンジ用フォームの送信トリガーは、上の initializeSheets() 内の setupVizReview_ が登録し直す
+  // （この関数の頭で onFormSubmit のトリガーを一度全部消しているため）
 }
 
 /**
@@ -311,6 +320,9 @@ function notifyVcRoomSync_(spreadsheet, result) {
 /** フォーム送信時のメイン処理（新規登録と回答編集の両方が飛んでくる） */
 function onFormSubmit(e) {
   const config = getConfig_();
+  // ナイスチャレンジ用フォームの送信はイベント登録とは別の処理（VizReview.gs）。
+  // 同じ onFormSubmit トリガーに乗ってくるので、送信元のフォームで振り分ける
+  if (handleVizFormSubmit_(config, e)) return;
   const formResponse = e.response;
   const responseId = formResponse.getId();
   // 送信元フォームで種別を判定（師匠用フォーム経由 = 師匠イベント）
