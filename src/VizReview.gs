@@ -111,7 +111,7 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
     console.error('ナイスチャレンジの投稿に失敗しました（回答は削除していません）: ' + responseId);
     if (authorId) {
       sendDirectMessage_(config, authorId,
-        ':warning: ナイスチャレンジの投稿できませんでした。運営へ連絡してください。');
+        ':warning: ナイスチャレンジを投稿できませんでした。運営へ連絡してください。');
     }
     return;
   }
@@ -133,7 +133,7 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
 function notifyVizAuthor_(config, authorId, formResponse, retentionDays) {
   const until = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000);
   sendDirectMessage_(config, authorId,
-    'ナイスチャレンジの投稿しました :white_check_mark:\n' +
+    'ナイスチャレンジを投稿しました :white_check_mark:\n' +
     '内容を直したいときは、' + Utilities.formatDate(until, 'Asia/Tokyo', 'M/d') + ' ごろまでなら、' +
     '次のURLから回答を編集すると投稿も更新されます（このURLは他の人に共有しないでください）。\n' +
     formResponse.getEditResponseUrl());
