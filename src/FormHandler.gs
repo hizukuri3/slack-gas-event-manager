@@ -90,6 +90,22 @@ function applyFormHints_(formId, vcRoomChoices, displayTitle) {
   form.getItems().forEach(function (item) {
     const title = item.getTitle();
 
+    if (title === FORM_TITLES.ORGANIZER) {
+      item.setHelpText(
+        'Slackで /event と打つと、この欄が入力済みのフォームが開けます。' +
+        '手で入れるときは、Slackのプロフィール →「︙」→「メンバーIDをコピー」で調べられます（U から始まる文字列）。' +
+        '編集用URLなどのDMの送り先に使います。'
+      );
+      if (item.getType() === FormApp.ItemType.TEXT) {
+        // 受け付ける形は normalizeSlackUserId_ に合わせる。Slackからコピーして貼ると
+        // <@U123> や @U123 の形になるので、それも通す（サーバー側で U123 に揃える）
+        item.asTextItem().setValidation(FormApp.createTextValidation()
+          .setHelpText('SlackユーザーIDを入力してください（U から始まる文字列）。')
+          .requireTextMatchesPattern('^\\s*(<@|@)?[UWuw][A-Za-z0-9]{4,}(\\|[^>]*)?>?\\s*$')
+          .build());
+      }
+    }
+
     if (title === FORM_TITLES.FORMAT) {
       // セクションがあれば選択肢は applyFormSections_ が行き先付きで貼っている。
       // ここで値だけ貼り直すと行き先が消えるので、無いときだけ貼る
@@ -352,6 +368,19 @@ function onFormSubmit(e) {
 
     // 2. 入力検証（不備があれば登録・更新せず、修正用リンク付きでDM通知）
     const existing = findEventByResponseId_(config, responseId);
+
+    // 形式は正しいがSlackに存在しないID（打ち間違い）は、登録も告知もしない。
+    // 実在しない人へはDMが届かず、入力不備の通知も編集用URLも渡せないため、他の検証より先に行う。
+    // 確認するのは新規と、編集で主催者IDを変えたときだけ（変えていなければAPIを呼ばない）。
+    // 形式が不正なIDは、下の検証が従来どおり扱う
+    const organizerChanged = !existing || existing.organizer !== answers.organizer;
+    if (isValidSlackUserId_(answers.organizer) && organizerChanged &&
+        !slackUserExists_(config, answers.organizer)) {
+      console.warn('主催者のSlackユーザーIDが見つかりません。登録しませんでした: ' + responseId);
+      postOrganizerUnreachableNotice_(config, '主催者のSlackユーザーIDがSlackに見つからないため、登録していません');
+      return;
+    }
+
     const errors = validateAnswers_(answers, existing);
     if (errors.length > 0) {
       notifyFormError_(config, formResponse, errors);
@@ -425,6 +454,11 @@ function isValidSlackUserId_(id) {
 
 // ==================== 入力検証・二重登録ガード ====================
 
+// 1件のイベントの長さの上限（時間）。combineEndTime_ は終了が開始以前だと翌日扱いにするので、
+// 14:00開始・13:00終了のような打ち間違いが23時間のイベントとして通ってしまう（Meetの自動発行なら
+// 60分ごとの予定が約23件できる）。ここで差し戻す。12時間を超える会は無い前提
+const MAX_EVENT_HOURS = 12;
+
 /**
  * フォーム回答を検証してエラー文言の配列を返す（空配列なら問題なし）。
  * @param {Object} answers 回答
@@ -443,6 +477,13 @@ function validateAnswers_(answers, existing) {
   const startChanged = !existing || existing.start.getTime() !== answers.start.getTime();
   if (startChanged && answers.start.getTime() < Date.now()) {
     errors.push('開始日時が過去になっています。日付・時刻を確認してください。');
+  }
+  // 長さの上限も、日時を変えたときだけ見る（長い既存イベントを、日時を変えずに中止できなくなるため）
+  const timeChanged = !existing || startChanged || existing.end.getTime() !== answers.end.getTime();
+  const hours = (answers.end.getTime() - answers.start.getTime()) / (60 * 60 * 1000);
+  if (timeChanged && hours > MAX_EVENT_HOURS) {
+    errors.push('開始から終了まで約' + Math.round(hours) + '時間になっています（上限は' + MAX_EVENT_HOURS +
+      '時間）。「' + FORM_TITLES.END_TIME + '」を確認してください。');
   }
   if (!Number.isInteger(answers.capacity) || answers.capacity < 1) {
     errors.push('定員は1以上の整数で入力してください。');
@@ -482,14 +523,21 @@ function notifyFormError_(config, formResponse, errors) {
       '以下のURLから修正して再送信してください:\n' + formResponse.getEditResponseUrl()
     );
   } else {
-    // DMの宛先が分からないため、告知チャンネルで心当たりのある人へ案内
-    postMessage_(
-      config, config.slackChannelId,
-      ':warning: フォームからのイベント登録を受け付けられませんでした' +
-      '（主催者のSlackユーザーIDが不正なため、通知をお送りできません）。\n' +
-      '心当たりのある方は、Slackで `/event` を実行して届くフォームから再登録してください。'
-    );
+    postOrganizerUnreachableNotice_(config, '主催者のSlackユーザーIDが不正なため、通知をお送りできません');
   }
+}
+
+/**
+ * 主催者へDMを送れないとき、告知チャンネルで心当たりのある人へ案内する。
+ * @param {string} reason 理由（括弧書きで添える）
+ */
+function postOrganizerUnreachableNotice_(config, reason) {
+  postMessage_(
+    config, config.slackChannelId,
+    ':warning: フォームからのイベント登録を受け付けられませんでした' +
+    '（' + reason + '）。\n' +
+    '心当たりのある方は、Slackで `/event` を実行して届くフォームから再登録してください。'
+  );
 }
 
 /**
@@ -577,15 +625,25 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
   const participantsUrl = buildParticipantsPageUrl_(config, eventId);
   const msg = buildAnnouncementBlocks_(ev, [], participantsUrl, buildCalendarViewUrl_(config));
   const ts = postMessage_(config, config.slackChannelId, msg.text, null, msg.blocks);
-  if (ts) {
-    ev.slackTs = ts;
+  if (!ts) {
+    // 告知が出ないイベントは、誰も参加登録できないのに、主催者には「登録しました」と届いてしまう。
+    // 作ったカレンダー予定を消し、シートにも書かずに差し戻す。シートに無いので、同じ編集用URLから
+    // 再送信すれば新規登録としてやり直せる（既存イベントの編集としては扱われない）
+    console.error('Slackへの告知を投稿できませんでした。登録を取り消します: ' + ev.eventId);
+    deleteCalendarEvents_(config, ev);
+    notifyFormError_(config, formResponse, [
+      'Slackへ告知を投稿できなかったため、登録しませんでした。' +
+      '少し時間をおいて、同じURLからもう一度送信してください。' +
+      '何度やっても同じ場合は、運営にお問い合わせください。']);
+    return;
   }
+  ev.slackTs = ts;
 
   // 3. スプレッドシートへ記録（管理用・公開用の両方）
   insertEvent_(config, ev);
 
   // 4. カレンダー説明欄に概要・参加者確認URL・Slackパーマリンクを書き込み
-  const permalink = ts ? getPermalink_(config, config.slackChannelId, ts) : '';
+  const permalink = getPermalink_(config, config.slackChannelId, ts);
   patchCalendarDescriptions_(config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
 
   // 5. 主催者へ回答編集用URLをDMで通知
@@ -618,9 +676,11 @@ function handleEventEdit_(config, existing, answers, formResponse) {
   const prevEnd = existing.end;
   // 変更前のVC部屋。取り直しで変わったら参加者へ周知する必要がある
   const prevRoom = existing.vcRoom;
+  // すでに中止になっていたか。中止済みの再送信で、中止の通知を繰り返さないために使う
+  const wasCancelled = isCancelledStatus_(existing.status);
   // 中止から「開催」へ戻す編集か。中止の間その部屋は空き扱いになっており、
   // 他のイベントに取られている可能性があるため、復活時は必ず取り直す
-  const revived = isCancelledStatus_(existing.status) && !isCancelledStatus_(answers.status);
+  const revived = wasCancelled && !isCancelledStatus_(answers.status);
   // 開催時間そのものが変わったか（開催形式の変更は含めない。参加者への時間変更周知の判定に使う）
   const timeChanged =
     existing.start.getTime() !== answers.start.getTime() ||
@@ -650,7 +710,7 @@ function handleEventEdit_(config, existing, answers, formResponse) {
     // シートには部屋名を残す（中止の告知に会場を出したままにするため）。
     // 「開催」へ戻す編集は上の revived で必ず取り直すので、空いた部屋を
     // 持ったまま復活することはない
-    cancelEvent_(config, ev);
+    cancelEvent_(config, ev, wasCancelled);
     return;
   }
 
@@ -770,8 +830,23 @@ function notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom) {
   });
 }
 
-/** イベント中止処理：カレンダー削除（分割予定を含む全件）・シート更新・Slack告知へ【中止】追記 */
-function cancelEvent_(config, ev) {
+/**
+ * イベント中止処理：カレンダー削除（分割予定を含む全件）・シート更新・Slack告知へ【中止】追記。
+ * 告知スレッドの投稿では、参加登録中・キャンセル待ちの人をメンションする。
+ * ボタンを押しただけの人はスレッドを購読していないので、メンションしないと通知が届かない。
+ * @param {boolean} wasCancelled すでに中止だったか。そうなら、シートと告知の更新だけ行い、
+ *   カレンダー削除・中止の投稿・主催者へのDMは繰り返さない
+ */
+function cancelEvent_(config, ev, wasCancelled) {
+  if (wasCancelled) {
+    updateEvent_(config, ev);
+    if (ev.slackTs) refreshAnnouncement_(config, ev);
+    return;
+  }
+
+  // 中止にした時点の参加者を、カレンダー削除などより前に控えておく
+  const participants = listParticipants_(config, ev.eventId);
+
   deleteCalendarEvents_(config, ev);
   updateEvent_(config, ev); // ステータス「中止」を記録 → 以降のスタンプ検知はスキップされる
 
@@ -780,7 +855,7 @@ function cancelEvent_(config, ev) {
     refreshAnnouncement_(config, ev);
     postMessage_(
       config, ev.slackChannel,
-      ':no_entry: イベント「' + ev.title + '」は中止になりました。',
+      ':no_entry: イベント「' + ev.title + '」は中止になりました。' + buildCancelMentions_(participants),
       ev.slackTs
     );
   }
@@ -789,5 +864,20 @@ function cancelEvent_(config, ev) {
     config, ev.organizer,
     ':no_entry: イベント「' + ev.title + '」を中止として処理しました（カレンダー削除・告知更新済み）。'
   );
+}
+
+/**
+ * 中止の投稿に付ける、参加者へのメンション（改行から始まる文字列。誰もいなければ空文字）。
+ * 運営として参加した人は「参加登録」に含める。
+ * @param {Array} participants listParticipants_ の結果
+ */
+function buildCancelMentions_(participants) {
+  const mention = function (p) { return '<@' + p.userId + '>'; };
+  const joined = participants.filter(function (p) { return p.status !== PSTATUS.WAITLIST; });
+  const waiting = participants.filter(function (p) { return p.status === PSTATUS.WAITLIST; });
+  let text = '';
+  if (joined.length > 0) text += '\n参加登録: ' + joined.map(mention).join(' ');
+  if (waiting.length > 0) text += '\nキャンセル待ち: ' + waiting.map(mention).join(' ');
+  return text;
 }
 
