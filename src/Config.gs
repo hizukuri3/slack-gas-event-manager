@@ -21,7 +21,6 @@ const SHEET_QUIZ_SETTINGS = 'クイズ設定';
 const SHEET_QUIZ_LOG = 'クイズ回答ログ';
 // ナイスチャレンジ（フォーム回答 → チャンネル投稿 → スタンプ・返信の記録）。管理用①にのみ作る
 const SHEET_VIZ_SETTINGS = 'ナイスチャレンジ設定';
-const SHEET_VIZ_FIELDS = 'ナイスチャレンジ投稿項目';
 const SHEET_VIZ_LOG = 'ナイスチャレンジ投稿ログ';
 const SHEET_VIZ_REVIEW_LOG = 'ナイスチャレンジレビューログ';
 
@@ -243,15 +242,21 @@ const VIZ_FORM_TITLES = {
   CONSULT: '相談内容をひとことで！（任意）'
 };
 
-// 投稿に出す見出しの既定値。bootstrap() が作るフォームの設問名は注記つきで長いので、
-// 「ナイスチャレンジ投稿項目」に行を足すときだけ、これを見出しに入れる（後から運営が直せる）
-const VIZ_DEFAULT_FIELD_LABELS = {};
-VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.ROOM] = '所属部屋';
-VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.LINK] = '成果物のリンク';
-VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.TARGET] = 'FBを受けたい対象';
-VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.STATE] = '成果物の状態';
-VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.WANT] = '欲しいFB';
-VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.CONSULT] = '相談内容';
+// ---- 投稿の形（固定）----
+// フォームの設問名は注記つきで長いので、投稿には短い見出しで、この順に載せる。
+// 設問名はフォームの設問と完全一致で結びつく。ここに無い設問は、回答があれば設問名のまま末尾に足される
+const VIZ_POST_FIELDS = [
+  { question: VIZ_FORM_TITLES.ROOM, label: '所属部屋' },
+  { question: VIZ_FORM_TITLES.LINK, label: '成果物のリンク' },
+  { question: VIZ_FORM_TITLES.TARGET, label: 'FBを受けたい対象' },
+  { question: VIZ_FORM_TITLES.STATE, label: '成果物の状態' },
+  { question: VIZ_FORM_TITLES.WANT, label: '欲しいFB' },
+  { question: VIZ_FORM_TITLES.CONSULT, label: '相談内容' }
+];
+// {author} は投稿者のメンション（特定できなければ「メンバー」）。{masters} は師匠リストの有効な全員のメンション
+const VIZ_POST_HEADER = '{author} さんがVizのレビューを募集しています :eyes:';
+const VIZ_POST_MASTER_LINE = '{masters} レビューをお願いします :pray:';
+const VIZ_POST_FOOTER = 'このスレッドでレビューをお待ちしています :bar_chart:';
 
 // フォームの説明文の中で、設定シートのリンクに置き換わる印
 const VIZ_PLACEHOLDER_CHANNEL = '{ナイスチャレンジ}';
@@ -303,13 +308,6 @@ const VIZ_SETTING_ITEMS = [
     note: 'フォームの「' + VIZ_FORM_TITLES.ROOM + '」の選択肢の書き方。' + VIZ_PLACEHOLDER_MASTER +
       ' が、「師匠リスト」の有効な師匠の「表示名」に置き換わります（表示名が空の行は出ません）。' +
       '例: 「' + VIZ_PLACEHOLDER_MASTER + '部屋」→「田中部屋」。師匠リストを編集すると、フォームの選択肢がその場で貼り直されます' },
-  { key: 'HEADER', label: '冒頭の文', value: '{author} さんがVizのレビューを募集しています :eyes:',
-    note: '{author} が投稿者のメンションに置き換わります（本人を特定できなかったときは「メンバー」）。空欄なら冒頭なし' },
-  { key: 'MASTER_LINE', label: '師匠へのメンションの文', value: '{masters} レビューをお願いします :pray:',
-    note: '{masters} が「師匠リスト」シートの有効な師匠全員のメンションに置き換わります。' +
-      '師匠が0人のときは、この行は出ません。空欄なら師匠へのメンションはしません' },
-  { key: 'FOOTER', label: '末尾の文', value: 'このスレッドでレビューをお待ちしています :bar_chart:',
-    note: '空欄なら末尾なし' },
   { key: 'RETENTION_DAYS', label: '回答を残す日数（編集できる期間）', value: '7',
     note: '0〜365（日）。投稿者へ回答の編集用URLをDMで送り、この日数のあいだは、フォームで回答を直すとSlackの投稿も直ります。' +
       '過ぎた回答はフォームから自動で削除します。0なら投稿後すぐ削除し、編集はできません。' +
@@ -321,18 +319,6 @@ const VIZ_SETTING_ITEMS = [
 ];
 
 const VIZ_SETTINGS_HEADER = ['項目', '値', '説明'];
-
-// ---- ナイスチャレンジ投稿項目の列定義（0始まり）----
-// 人が編集するシート。フォームの設問1つにつき1行で、行の並びがそのまま投稿の並びになる。
-// フォームの設問が増えたら、足りない行が最後に足される（既存の行は触らない）
-const VIZ_FIELD_COL = {
-  QUESTION: 0,  // フォームの設問名（完全一致で回答と結びつく）
-  LABEL: 1,     // 投稿に出す見出し。空欄なら設問名をそのまま使う
-  ENABLED: 2,   // 有効（ドロップダウン。空欄も有効。「無効」で投稿に載せない）
-  NOTE: 3       // メモ（処理には使わない）
-};
-
-const VIZ_FIELDS_HEADER = ['設問名', '投稿の見出し（空欄＝設問名）', ENABLED_HEADER, 'メモ'];
 
 // ---- ナイスチャレンジ投稿ログの列定義（0始まり）----
 // システムが書くシート。1回答（1投稿）で1行。スタンプ数・返信数は数式で、

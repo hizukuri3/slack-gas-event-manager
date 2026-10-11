@@ -103,12 +103,8 @@ function onManagementSpreadsheetEdit(e) {
     return;
   }
   if (name === SHEET_VIZ_SETTINGS) {
-    // フォームIDが変わったら、送信トリガーと投稿項目をその場で追随させる
+    // フォームIDが変わったら、送信トリガーをその場で追随させる
     syncVizSettings_(e.source);
-    return;
-  }
-  if (name === SHEET_VIZ_FIELDS) {
-    setupEnabledColumn_(e.range.getSheet(), VIZ_FIELD_COL.ENABLED);
     return;
   }
 
