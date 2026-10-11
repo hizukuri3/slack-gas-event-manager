@@ -425,6 +425,11 @@ function isValidSlackUserId_(id) {
 
 // ==================== 入力検証・二重登録ガード ====================
 
+// 1件のイベントの長さの上限（時間）。combineEndTime_ は終了が開始以前だと翌日扱いにするので、
+// 14:00開始・13:00終了のような打ち間違いが23時間のイベントとして通ってしまう（Meetの自動発行なら
+// 60分ごとの予定が約23件できる）。ここで差し戻す。12時間を超える会は無い前提
+const MAX_EVENT_HOURS = 12;
+
 /**
  * フォーム回答を検証してエラー文言の配列を返す（空配列なら問題なし）。
  * @param {Object} answers 回答
@@ -443,6 +448,13 @@ function validateAnswers_(answers, existing) {
   const startChanged = !existing || existing.start.getTime() !== answers.start.getTime();
   if (startChanged && answers.start.getTime() < Date.now()) {
     errors.push('開始日時が過去になっています。日付・時刻を確認してください。');
+  }
+  // 長さの上限も、日時を変えたときだけ見る（長い既存イベントを、日時を変えずに中止できなくなるため）
+  const timeChanged = !existing || startChanged || existing.end.getTime() !== answers.end.getTime();
+  const hours = (answers.end.getTime() - answers.start.getTime()) / (60 * 60 * 1000);
+  if (timeChanged && hours > MAX_EVENT_HOURS) {
+    errors.push('開始から終了まで約' + Math.round(hours) + '時間になっています（上限は' + MAX_EVENT_HOURS +
+      '時間）。「' + FORM_TITLES.END_TIME + '」を確認してください。');
   }
   if (!Number.isInteger(answers.capacity) || answers.capacity < 1) {
     errors.push('定員は1以上の整数で入力してください。');
