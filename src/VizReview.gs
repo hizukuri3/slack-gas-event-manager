@@ -96,6 +96,13 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
   if (!authorId) {
     console.warn('投稿者のSlackユーザーIDを読み取れませんでした（本人の除外ができません）');
   }
+  // 形式は正しいが実在しないID（打ち間違い）は投稿しない。誰にも知らせる手段がないので、
+  // 本人には「チャンネルに出ない」ことで気づいてもらう（フォームの送信後メッセージにも書いてある）。
+  // 回答は消さず、運営がフォームの回答から確認できるようにしておく
+  if (authorId && !slackUserExists_(config, authorId)) {
+    console.warn('投稿者のSlackユーザーIDが見つかりません。投稿しませんでした（回答は削除していません）: ' + responseId);
+    return;
+  }
 
   // 師匠は常に全員。メンション先は「師匠リスト」の有効な人（getConfig_ が読むプロパティの写し）
   const text = buildVizPostText_(settings, fields, answers, authorId, config.masterUserIds);
@@ -875,6 +882,9 @@ function createVizForm_() {
   form.setCollectEmail(false);            // メールアドレスは集めない（個人情報を持たない）
   form.setAllowResponseEdits(true);       // 期間中は、編集用URLから回答を直すと投稿も直る
   form.setLimitOneResponsePerUser(false); // 何作品でも依頼できるように
+  // 全員に同じ文言が出る。IDの打ち間違いは投稿されないことで気づいてもらうので、その案内を書いておく
+  form.setConfirmationMessage('回答を記録しました。ナイスチャレンジの投稿先チャンネルに投稿されない場合は、' +
+    '「' + VIZ_FORM_TITLES.AUTHOR + '」の入力を確認して、もう一度送信してください。');
   vizFormSpec_().forEach(function (spec) { addFormItem_(form, spec); });
   const author = findFormItemByTitle_(form, VIZ_FORM_TITLES.AUTHOR).asTextItem();
   author.setHelpText('Slackで ' + VIZ_SLASH_COMMAND + ' と打つと、この欄が入力済みのフォームが開けます。' +
