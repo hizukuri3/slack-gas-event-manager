@@ -23,6 +23,10 @@ features:
       url: https://script.google.com/macros/s/REPLACE_WITH_EXEC_URL/exec
       description: イベント登録フォームを開く（主催者ID入力済み）
       should_escape: false
+    - command: /review
+      url: https://script.google.com/macros/s/REPLACE_WITH_EXEC_URL/exec
+      description: ナイスチャレンジのフォームを開く（投稿者ID入力済み）
+      should_escape: false
 
 oauth_config:
   scopes:
@@ -32,12 +36,11 @@ oauth_config:
       - chat:write.customize # クイズ出題時に、クイズ設定シートの表示名・アイコンで投稿するため
       - files:write       # 画像付きのクイズ問題のアップロード
       - users:read        # 表示名（Display Name）の取得
-      - users:read.email  # ナイスチャレンジ：フォームに入力されたメールから投稿者のSlackユーザーを特定（メールは保存しない）
       - im:write          # 主催者への編集URL通知・繰り上げ確定のDM送信
       - channels:history  # 告知メッセージのパーマリンク取得
       - channels:read     # 転送先チャンネル名 → チャンネルID の解決（conversations.list）
       - reactions:read    # 絵文字転送・クイズ回答記録。リアクションイベントの受信と reactions.get
-      - commands          # /event スラッシュコマンド用
+      - commands          # /event・/review スラッシュコマンド用
 
 settings:
   interactivity:

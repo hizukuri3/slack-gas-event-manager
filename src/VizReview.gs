@@ -8,14 +8,14 @@
  * フォームIDか投稿先チャンネルが空のあいだは何もしない。
  *
  * ★ 個人情報の扱い ★
- * 投稿者本人の特定にはフォームで入力されたメールアドレスを使う（users.lookupByEmail）。
- * メールアドレスはシートにもログにも書かない。残るのは Slack ユーザーID だけ。
+ * 投稿者本人の特定には、フォームで入力された Slack ユーザーIDを使う。メールアドレスは集めない。
+ * スラッシュコマンド（VIZ_SLASH_COMMAND）で開いたフォームでは、IDが自動で入る。
  * フォームの回答は「ナイスチャレンジ設定」の日数だけ残し（その間は、回答を直すとSlackの投稿も直る）、
  * 過ぎたら毎日のトリガー（cleanupVizResponses）が削除する。0日なら投稿後すぐ削除する。
  * 投稿者を特定できなかった回答は、直す手段が無いのですぐ削除する。
  * 投稿に失敗した回答は、再処理できるよう削除しない。
  *
- * 本人（投稿者）のスタンプ・返信は記録しない。メールから本人を特定できなかった投稿は
+ * 本人（投稿者）のスタンプ・返信は記録しない。IDが不正で本人を特定できなかった投稿は
  * 除外ができないので、ナイスチャレンジ投稿ログの「投稿者」欄が「本人不明」になる。
  */
 
@@ -66,36 +66,35 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
   const responseId = formResponse.getId();
   const logSheet = getOrCreateSheet_(spreadsheet, SHEET_VIZ_LOG, VIZ_LOG_HEADER);
 
-  // 回答を設問名で引く。メールアドレスの設問だけは本文に入れず、投稿者の特定にだけ使う
+  // 回答を設問名で引く。投稿者のSlackユーザーIDの設問だけは本文に入れず、投稿者の特定にだけ使う
   const answers = {};
-  let email = '';
+  let authorInput = '';
   formResponse.getItemResponses().forEach(function (itemResponse) {
     const title = itemResponse.getItem().getTitle();
     const value = itemResponse.getResponse();
     const text = Array.isArray(value) ? value.join('、') : String(value || '');
-    if (title === settings.emailQuestion) {
-      email = text.trim();
+    if (title === settings.authorQuestion) {
+      authorInput = text.trim();
     } else {
       answers[title] = text.trim();
     }
   });
-  // 設問としてのメールが無ければ、フォームの「メールアドレスを収集する」設定で集めた値を使う
-  if (!email) email = getVizRespondentEmail_(formResponse);
   ensureVizFieldRows_(spreadsheet, Object.keys(answers));
   const fields = readVizFields_(spreadsheet);
 
   // 同じ回答IDがすでに投稿済みなら、回答の編集（または Google 側の二重送信）。
-  // 編集なら投稿を書き換える。投稿者はログのものを使い、メールは引き直さない
+  // 編集なら投稿を書き換える。投稿者はログのものを使い、入力のIDは見直さない
   const posted = findVizPostByResponseId_(logSheet, responseId);
   if (posted) {
     updateVizPost_(config, logSheet, settings, fields, answers, posted);
     return;
   }
 
-  // 取得できなければ空文字。メールは変数に持つだけで、ログにも出さない
-  const authorId = email ? lookupSlackUserIdByEmail_(config, email) : '';
+  // 形式が不正なら空文字（本人不明）。入力された値はログに出さない
+  const normalizedId = normalizeSlackUserId_(authorInput);
+  const authorId = isValidSlackUserId_(normalizedId) ? normalizedId : '';
   if (!authorId) {
-    console.warn('メールアドレスから投稿者を特定できませんでした（本人の除外ができません）');
+    console.warn('投稿者のSlackユーザーIDを読み取れませんでした（本人の除外ができません）');
   }
 
   // 師匠は常に全員。メンション先は「師匠リスト」の有効な人（getConfig_ が読むプロパティの写し）
@@ -112,7 +111,7 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
 
   const row = recordVizPost_(logSheet, authorId, text, channelId, messageTs, responseId);
 
-  // 回答を残すのは、本人へ編集用URLを渡せるときだけ。渡せないなら、メールが残るだけなので消す。
+  // 回答を残すのは、本人へ編集用URLを渡せるときだけ。渡せないなら、直す手段がないので消す。
   // ログに書けなかったとき（row が 0）は、編集も期限切れの削除もできなくなるので、同じくすぐ消す
   if (authorId && settings.retentionDays > 0 && row) {
     notifyVizAuthor_(config, authorId, formResponse, settings.retentionDays);
@@ -120,15 +119,6 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
   }
   if (deleteVizResponse_(e.source, responseId) && row) {
     logSheet.getRange(row, VIZ_LOG_COL.RESPONSE_DELETED_AT + 1).setValue(new Date());
-  }
-}
-
-/** フォームの「メールアドレスを収集する」設定で集めたメール。集めていなければ空文字 */
-function getVizRespondentEmail_(formResponse) {
-  try {
-    return String(formResponse.getRespondentEmail() || '').trim();
-  } catch (err) {
-    return '';
   }
 }
 
@@ -208,9 +198,9 @@ function postVizMessage_(config, channelId, settings, text) {
 /** 回答をフォームから削除する。失敗しても投稿は済んでいるので止めず、削除できたかを返す */
 function deleteVizResponse_(form, responseId) {
   try {
-    // 回答シートに紐づいていると、フォームの回答を消してもシート側の行（メール入り）が残る
+    // 回答シートに紐づいていると、フォームの回答を消してもシート側の行が残る
     if (form.getDestinationType() === FormApp.DestinationType.SPREADSHEET) {
-      console.warn('このフォームは回答シートに紐づいています。メールアドレスがシートに残るため、' +
+      console.warn('このフォームは回答シートに紐づいています。回答がシートに残るため、' +
         'フォームの「回答」タブで「リンク解除」するか、シートの行を削除してください');
     }
     form.deleteResponse(responseId);
@@ -476,11 +466,11 @@ function readVizSettings_(spreadsheet) {
   return {
     formId: parseFormId_(raw.FORM_ID),
     channel: raw.CHANNEL,
-    emailQuestion: raw.EMAIL_QUESTION || VIZ_FORM_TITLES.EMAIL,
+    authorQuestion: raw.AUTHOR_QUESTION || VIZ_FORM_TITLES.AUTHOR,
     header: raw.HEADER,
     masterLine: raw.MASTER_LINE,
     footer: raw.FOOTER,
-    // 数字でない・範囲外の値は0（すぐ削除）に倒す。メールを残す側には倒さない
+    // 数字でない・範囲外の値は0（すぐ削除）に倒す。回答を残す側には倒さない
     retentionDays: /^\d{1,3}$/.test(raw.RETENTION_DAYS) && Number(raw.RETENTION_DAYS) <= 365
       ? Number(raw.RETENTION_DAYS) : 0,
     botName: raw.BOT_NAME,
@@ -537,7 +527,7 @@ function readVizFields_(spreadsheet) {
 
 /**
  * 「ナイスチャレンジ投稿項目」に、まだ無い設問の行を末尾へ足す。既存の行（見出し・並び・有効）は触らない。
- * メールアドレスの設問は呼び出し側が除いて渡す。
+ * 投稿者のSlackユーザーIDの設問は呼び出し側が除いて渡す。
  */
 function ensureVizFieldRows_(spreadsheet, questions) {
   const sheet = getOrCreateSheet_(spreadsheet, SHEET_VIZ_FIELDS, VIZ_FIELDS_HEADER);
@@ -551,7 +541,7 @@ function ensureVizFieldRows_(spreadsheet, questions) {
 
 /**
  * フォームの設問を「ナイスチャレンジ投稿項目」へ反映する（フォームを差し替えた・設問を足したとき）。
- * セクション区切りや画像など回答を持たない設問、メールアドレスの設問は入れない。
+ * セクション区切りや画像など回答を持たない設問、投稿者のSlackユーザーIDの設問は入れない。
  */
 function syncVizFields_(spreadsheet, settings) {
   if (!settings || !settings.formId) return 0;
@@ -560,7 +550,7 @@ function syncVizFields_(spreadsheet, settings) {
     const type = item.getType();
     return type !== FormApp.ItemType.PAGE_BREAK && type !== FormApp.ItemType.SECTION_HEADER &&
       type !== FormApp.ItemType.IMAGE && type !== FormApp.ItemType.VIDEO &&
-      item.getTitle() !== settings.emailQuestion;
+      item.getTitle() !== settings.authorQuestion;
   }).map(function (item) { return item.getTitle(); });
   const before = readVizFields_(spreadsheet).length;
   ensureVizFieldRows_(spreadsheet, questions);
@@ -612,6 +602,7 @@ function syncVizSettings_(spreadsheet) {
     applyVizFormSettings_(settings);
     const added = syncVizFields_(spreadsheet, settings);
     if (added > 0) message += '（投稿項目に ' + added + '件の設問を追加しました）';
+    refreshVizPrefill_(settings);
   } catch (err) {
     // フォームを開けない（IDの誤り・権限なし）ときもここへ来る
     console.warn('ナイスチャレンジのフォームを反映できませんでした: ' + err);
@@ -648,9 +639,69 @@ function setupVizReview_(config) {
     syncVizFormTrigger_(config, settings);
     applyVizFormSettings_(settings);
     syncVizFields_(spreadsheet, settings);
+    refreshVizPrefill_(settings);
   } catch (err) {
     console.warn('ナイスチャレンジのフォームの設問を「ナイスチャレンジ投稿項目」へ反映できませんでした: ' + err);
   }
+}
+
+// ==================== スラッシュコマンド用の事前入力 ====================
+
+// スラッシュコマンドはSlackの3秒ルールの対象で、FormApp.openById() は約1秒かかる。
+// 応答経路では使わないため、フォームIDと「投稿者のSlackユーザーID」設問のエントリIDを
+// ここで調べてスクリプトプロパティへ写しておく（シートの読み取りも応答経路に入れないため）。
+const VIZ_PROP_FORM_ID = 'VIZ_FORM_ID';
+const VIZ_PROP_ENTRY_AUTHOR = 'VIZ_FORM_ENTRY_AUTHOR';
+
+/**
+ * 設定のフォームIDと、投稿者IDの設問のエントリIDをスクリプトプロパティへ写す。
+ * フォームIDが空なら消す（コマンドは「準備中」と返す）。設定の編集トリガーとセットアップから呼ぶ
+ */
+function refreshVizPrefill_(settings) {
+  const props = PropertiesService.getScriptProperties();
+  if (!settings || !settings.formId) {
+    props.deleteProperty(VIZ_PROP_FORM_ID);
+    props.deleteProperty(VIZ_PROP_ENTRY_AUTHOR);
+    return;
+  }
+  const entryId = extractVizPrefillEntryId_(settings.formId, settings.authorQuestion);
+  const values = {};
+  values[VIZ_PROP_FORM_ID] = settings.formId;
+  values[VIZ_PROP_ENTRY_AUTHOR] = entryId;
+  props.setProperties(values);
+  if (!entryId) {
+    console.warn('フォームに設問「' + settings.authorQuestion + '」が見つかりません。' +
+      'コマンドで開くフォームにIDは入りません');
+  }
+}
+
+/**
+ * 目印の値を入れた事前入力URLを1回生成し、entry.XXXXX=目印 を逆引きしてエントリIDを特定する
+ * （FormApp の item.getId() は事前入力URLのエントリIDとは別物）。見つからなければ空文字。
+ */
+function extractVizPrefillEntryId_(formId, questionTitle) {
+  // 設問の形式チェック（U/W始まりの英数字）に通る値にする。通らない値だと createResponse が弾く恐れがある
+  const MARKER = 'UVIZAUTHOR0';
+  const form = FormApp.openById(formId);
+  const response = form.createResponse();
+  let found = false;
+  form.getItems().forEach(function (item) {
+    if (item.getTitle() === questionTitle && item.getType() === FormApp.ItemType.TEXT) {
+      response.withItemResponse(item.asTextItem().createResponse(MARKER));
+      found = true;
+    }
+  });
+  if (!found) return '';
+  const query = String(response.toPrefilledUrl()).split('?')[1] || '';
+  const pairs = query.split('&');
+  for (let i = 0; i < pairs.length; i++) {
+    const eq = pairs[i].indexOf('=');
+    if (eq === -1) continue;
+    const key = pairs[i].slice(0, eq);
+    const value = decodeURIComponent(pairs[i].slice(eq + 1).replace(/\+/g, ' '));
+    if (key.indexOf('entry.') === 0 && value === MARKER) return key.replace('entry.', '');
+  }
+  return '';
 }
 
 // ==================== 回答の削除（期限切れ） ====================
@@ -689,7 +740,7 @@ function cleanupVizResponses() {
 /** ナイスチャレンジ用フォームの設問定義。既定の形で、運営がフォーム側で足したり直したりしてよい */
 function vizFormSpec_() {
   return [
-    { title: VIZ_FORM_TITLES.EMAIL, type: 'TEXT', required: true },
+    { title: VIZ_FORM_TITLES.AUTHOR, type: 'TEXT', required: true },
     { title: VIZ_FORM_TITLES.NAME, type: 'TEXT', required: true },
     { title: VIZ_FORM_TITLES.URL, type: 'TEXT', required: true },
     { title: VIZ_FORM_TITLES.POINT, type: 'PARAGRAPH_TEXT', required: false }
@@ -700,14 +751,16 @@ function vizFormSpec_() {
 function createVizForm_() {
   const form = FormApp.create(RESOURCE_NAMES.VIZ_FORM);
   form.setTitle(FORM_DISPLAY_TITLES.VIZ);
-  form.setCollectEmail(false);            // メールはGoogleアカウントからではなく、設問で入力してもらう
+  form.setCollectEmail(false);            // メールアドレスは集めない（個人情報を持たない）
   form.setAllowResponseEdits(true);       // 期間中は、編集用URLから回答を直すと投稿も直る
   form.setLimitOneResponsePerUser(false); // 何作品でも依頼できるように
   vizFormSpec_().forEach(function (spec) { addFormItem_(form, spec); });
-  const email = findFormItemByTitle_(form, VIZ_FORM_TITLES.EMAIL).asTextItem();
-  email.setHelpText('Slackに登録しているメールアドレスを入力してください。投稿者の特定にだけ使い、' +
-    '投稿には載せません。');
-  email.setValidation(FormApp.createTextValidation().requireTextIsEmail().build());
+  const author = findFormItemByTitle_(form, VIZ_FORM_TITLES.AUTHOR).asTextItem();
+  author.setHelpText('Slackで ' + VIZ_SLASH_COMMAND + ' と打つと、この欄が入力済みのフォームが開けます。' +
+    '手で入れるときは、Slackのプロフィール →「︙」→「メンバーIDをコピー」で調べられます（U から始まる文字列）。' +
+    '投稿者の特定にだけ使い、投稿には載せません。');
+  author.setValidation(FormApp.createTextValidation()
+    .requireTextMatchesPattern('^[UW][A-Z0-9]{4,}$').build());
   return form.getId();
 }
 
@@ -738,15 +791,4 @@ function readVizFormIdForLog_(managementSpreadsheetId) {
   } catch (err) {
     return '';
   }
-}
-
-// ==================== Slack ユーザーの特定 ====================
-
-/**
- * メールアドレスから Slack ユーザーID を引く。見つからなければ空文字。
- * メールはログに出さない（Slack API のエラーコードだけが callSlackApiGet_ に記録される）。
- */
-function lookupSlackUserIdByEmail_(config, email) {
-  const json = callSlackApiGet_(config, 'users.lookupByEmail', { email: email.toLowerCase() });
-  return json.ok && json.user ? json.user.id : '';
 }

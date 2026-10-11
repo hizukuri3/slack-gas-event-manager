@@ -128,7 +128,7 @@ Slack App の構成（スコープ・スラッシュコマンド・Interactivity
 1. [api.slack.com/apps](https://api.slack.com/apps) →「Create New App」→ **「From an app manifest」** を選び、ワークスペースを指定します。
 2. YAML を選び、[`slack/manifest.yml`](../slack/manifest.yml) の中身を貼り付けて Create します。
    - この時点では Request URL は `REPLACE_WITH_EXEC_URL` のプレースホルダのままで構いません（GAS をデプロイした後、手順7で実URLに差し替えます）。
-   - マニフェストには、告知投稿・DM・絵文字リアクション転送などに必要なスコープ、`/event` コマンド、そして**絵文字リアクション転送用の Event Subscriptions（`reaction_added` / `reaction_removed`）**、ナイスチャレンジ用の `message.channels` イベントと `users:read.email` スコープが含まれています（正確な内容は [`slack/manifest.yml`](../slack/manifest.yml) を参照）。
+   - マニフェストには、告知投稿・DM・絵文字リアクション転送などに必要なスコープ、`/event`・`/review` コマンド、そして**絵文字リアクション転送用の Event Subscriptions（`reaction_added` / `reaction_removed`）**、ナイスチャレンジ用の `message.channels` イベントが含まれています（正確な内容は [`slack/manifest.yml`](../slack/manifest.yml) を参照）。
 3. **Install to Workspace** でインストールし、表示される **Bot User OAuth Token（`xoxb-` で始まる文字列）** を控えます。
 4. 告知チャンネルにBotを招待します（チャンネルで `/invite @アプリ名`）。**招待を忘れると告知が投稿できません。**
 5. チャンネルIDを控えます（チャンネル名を右クリック →「リンクをコピー」→ URL末尾の `C` で始まる文字列）。
