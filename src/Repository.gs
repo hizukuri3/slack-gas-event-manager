@@ -95,6 +95,16 @@ function onManagementSpreadsheetEdit(e) {
   if (!e || !e.range) return;
   const name = e.range.getSheet().getName();
 
+  if (name === SHEET_QUIZ_SETTINGS || name === SHEET_QUIZ_QUESTIONS) {
+    // 出題の判定は毎時のトリガーが行う。ここは設定や問題の編集に、
+    // 「クイズ設定」の「次の出題」の表示を追随させるだけ（表示の更新は編集トリガーを起こさない）
+    try {
+      refreshQuizNextLabel_(e.source);
+    } catch (err) {
+      console.warn('「次の出題」の表示を更新できませんでした: ' + err);
+    }
+    return;
+  }
   if (name === SHEET_MASTER_LIST) {
     // 師匠リストは編集内容をスクリプトプロパティへ反映する必要がある
     notifyMasterListSync_(e.source, syncMasterList());
@@ -190,6 +200,11 @@ function initializeSheets() {
   const quizLog = getOrCreateSheet_(management, SHEET_QUIZ_LOG, QUIZ_LOG_HEADER);
   ensureHeader_(quizLog, QUIZ_LOG_HEADER);
   protectSystemSheet_(quizLog);
+  try {
+    refreshQuizNextLabel_(management); // 追加した「次の出題」の行に、いまの表示を入れる
+  } catch (err) {
+    console.warn('「次の出題」の表示を更新できませんでした: ' + err);
+  }
 
   // ナイスチャレンジ。フォームIDと投稿先チャンネルを入れるまでは動かない
   setupVizReview_(config);
