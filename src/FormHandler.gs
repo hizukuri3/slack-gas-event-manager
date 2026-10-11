@@ -368,6 +368,19 @@ function onFormSubmit(e) {
 
     // 2. 入力検証（不備があれば登録・更新せず、修正用リンク付きでDM通知）
     const existing = findEventByResponseId_(config, responseId);
+
+    // 形式は正しいがSlackに存在しないID（打ち間違い）は、登録も告知もしない。
+    // 実在しない人へはDMが届かず、入力不備の通知も編集用URLも渡せないため、他の検証より先に行う。
+    // 確認するのは新規と、編集で主催者IDを変えたときだけ（変えていなければAPIを呼ばない）。
+    // 形式が不正なIDは、下の検証が従来どおり扱う
+    const organizerChanged = !existing || existing.organizer !== answers.organizer;
+    if (isValidSlackUserId_(answers.organizer) && organizerChanged &&
+        !slackUserExists_(config, answers.organizer)) {
+      console.warn('主催者のSlackユーザーIDが見つかりません。登録しませんでした: ' + responseId);
+      postOrganizerUnreachableNotice_(config, '主催者のSlackユーザーIDがSlackに見つからないため、登録していません');
+      return;
+    }
+
     const errors = validateAnswers_(answers, existing);
     if (errors.length > 0) {
       notifyFormError_(config, formResponse, errors);
@@ -510,14 +523,21 @@ function notifyFormError_(config, formResponse, errors) {
       '以下のURLから修正して再送信してください:\n' + formResponse.getEditResponseUrl()
     );
   } else {
-    // DMの宛先が分からないため、告知チャンネルで心当たりのある人へ案内
-    postMessage_(
-      config, config.slackChannelId,
-      ':warning: フォームからのイベント登録を受け付けられませんでした' +
-      '（主催者のSlackユーザーIDが不正なため、通知をお送りできません）。\n' +
-      '心当たりのある方は、Slackで `/event` を実行して届くフォームから再登録してください。'
-    );
+    postOrganizerUnreachableNotice_(config, '主催者のSlackユーザーIDが不正なため、通知をお送りできません');
   }
+}
+
+/**
+ * 主催者へDMを送れないとき、告知チャンネルで心当たりのある人へ案内する。
+ * @param {string} reason 理由（括弧書きで添える）
+ */
+function postOrganizerUnreachableNotice_(config, reason) {
+  postMessage_(
+    config, config.slackChannelId,
+    ':warning: フォームからのイベント登録を受け付けられませんでした' +
+    '（' + reason + '）。\n' +
+    '心当たりのある方は、Slackで `/event` を実行して届くフォームから再登録してください。'
+  );
 }
 
 /**

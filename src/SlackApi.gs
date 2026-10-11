@@ -110,6 +110,16 @@ function callSlackApiGet_(config, method, params) {
   return json;
 }
 
+/**
+ * Slackユーザーが実在するか。存在しない・退会済みのときだけ false を返す。
+ * 通信失敗や権限エラーなど「確認できなかった」ときは true（呼び出し側の処理を止めない）。
+ */
+function slackUserExists_(config, userId) {
+  const json = callSlackApiGet_(config, 'users.info', { user: userId });
+  if (json.ok) return !(json.user && json.user.deleted);
+  return json.error !== 'user_not_found';
+}
+
 /** Bot自身が投稿したメッセージを削除する（絵文字転送の取り消しに使用） */
 function deleteMessage_(config, channel, ts) {
   return callSlackApi_(config, 'chat.delete', { channel: channel, ts: ts });
