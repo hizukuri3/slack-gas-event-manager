@@ -3,8 +3,9 @@
  * ナイスチャレンジ。フォームに回答があったら設定のチャンネルへ内容を投稿し、
  * その投稿に付いたスタンプとスレッド返信を「ナイスチャレンジレビューログ」に記録する。
  *
- * 設定は「ナイスチャレンジ設定」「ナイスチャレンジ投稿項目」シート（運営が編集）が正。フォームのIDも
+ * 設定は「ナイスチャレンジ設定」シート（運営が編集）が正。フォームのIDも
  * シートに書くので、フォームの差し替えはシートの書き換えだけで済む。
+ * 投稿の形（見出し・並び・冒頭と末尾の文）は VIZ_POST_FIELDS などでコードに固定している。
  * フォームIDか投稿先チャンネルが空のあいだは何もしない。
  *
  * ★ 個人情報の扱い ★
@@ -79,14 +80,12 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
       answers[title] = text.trim();
     }
   });
-  ensureVizFieldRows_(spreadsheet, Object.keys(answers));
-  const fields = readVizFields_(spreadsheet);
 
   // 同じ回答IDがすでに投稿済みなら、回答の編集（または Google 側の二重送信）。
   // 編集なら投稿を書き換える。投稿者はログのものを使い、入力のIDは見直さない
   const posted = findVizPostByResponseId_(logSheet, responseId);
   if (posted) {
-    updateVizPost_(config, logSheet, settings, fields, answers, posted);
+    updateVizPost_(config, logSheet, answers, posted);
     return;
   }
 
@@ -96,15 +95,22 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
   if (!authorId) {
     console.warn('投稿者のSlackユーザーIDを読み取れませんでした（本人の除外ができません）');
   }
+  // 形式は正しいが実在しないID（打ち間違い）は投稿しない。誰にも知らせる手段がないので、
+  // 本人には「チャンネルに出ない」ことで気づいてもらう（フォームの送信後メッセージにも書いてある）。
+  // 回答は消さず、運営がフォームの回答から確認できるようにしておく
+  if (authorId && !slackUserExists_(config, authorId)) {
+    console.warn('投稿者のSlackユーザーIDが見つかりません。投稿しませんでした（回答は削除していません）: ' + responseId);
+    return;
+  }
 
   // 師匠は常に全員。メンション先は「師匠リスト」の有効な人（getConfig_ が読むプロパティの写し）
-  const text = buildVizPostText_(settings, fields, answers, authorId, config.masterUserIds);
+  const text = buildVizPostText_(answers, authorId, config.masterUserIds);
   const messageTs = postVizMessage_(config, channelId, settings, text);
   if (!messageTs) {
     console.error('ナイスチャレンジの投稿に失敗しました（回答は削除していません）: ' + responseId);
     if (authorId) {
       sendDirectMessage_(config, authorId,
-        ':warning: ナイスチャレンジの投稿できませんでした。運営へ連絡してください。');
+        ':warning: ナイスチャレンジを投稿できませんでした。運営へ連絡してください。');
     }
     return;
   }
@@ -126,17 +132,17 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
 function notifyVizAuthor_(config, authorId, formResponse, retentionDays) {
   const until = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000);
   sendDirectMessage_(config, authorId,
-    'ナイスチャレンジの投稿しました :white_check_mark:\n' +
+    'ナイスチャレンジを投稿しました :white_check_mark:\n' +
     '内容を直したいときは、' + Utilities.formatDate(until, 'Asia/Tokyo', 'M/d') + ' ごろまでなら、' +
     '次のURLから回答を編集すると投稿も更新されます（このURLは他の人に共有しないでください）。\n' +
     formResponse.getEditResponseUrl());
 }
 
 /** 編集された回答の内容で、投稿済みのSlackメッセージを書き換える */
-function updateVizPost_(config, logSheet, settings, fields, answers, posted) {
+function updateVizPost_(config, logSheet, answers, posted) {
   // 投稿者のメンションは、ログに残っているSlack IDで作り直す（本人不明なら「メンバー」）
   const authorId = posted.author === VIZ_AUTHOR_UNKNOWN ? '' : posted.author;
-  const text = buildVizPostText_(settings, fields, answers, authorId, config.masterUserIds);
+  const text = buildVizPostText_(answers, authorId, config.masterUserIds);
   const json = callSlackApi_(config, 'chat.update', {
     channel: posted.channel, ts: posted.messageTs, text: text
   });
@@ -151,36 +157,37 @@ function updateVizPost_(config, logSheet, settings, fields, answers, posted) {
   logSheet.getRange(posted.rowNumber, VIZ_LOG_COL.TEXT + 1).setValue(truncateForLog_(text));
 }
 
-/** 冒頭文・各設問（ナイスチャレンジ投稿項目の順）・末尾文をつないだ投稿本文を作る */
-function buildVizPostText_(settings, fields, answers, authorId, masterIds) {
-  const lines = [];
-  if (settings.header) {
-    const author = authorId ? '<@' + authorId + '>' : 'メンバー';
-    lines.push(settings.header.split('{author}').join(author));
-  }
-  fields.forEach(function (field) {
-    if (!field.enabled) return;
+/**
+ * 冒頭文・各設問（VIZ_POST_FIELDS の順）・師匠へのメンション・末尾文をつないだ投稿本文を作る。
+ * 回答が空の設問は載せない。VIZ_POST_FIELDS に無い設問は、回答があれば設問名のまま末尾に足す
+ * （フォームに設問を足したときに、回答が黙って投稿から消えないようにするため）。
+ * @param {Object} answers 設問名 → 回答（フォームの並び順）
+ */
+function buildVizPostText_(answers, authorId, masterIds) {
+  const author = authorId ? '<@' + authorId + '>' : 'メンバー';
+  const lines = [VIZ_POST_HEADER.split('{author}').join(author)];
+
+  const fixed = {};
+  VIZ_POST_FIELDS.forEach(function (field) {
+    fixed[field.question] = true;
     const answer = answers[field.question];
     if (!answer) return;
-    lines.push('*' + escapeSlackText_(field.label || field.question) + '*\n' + escapeSlackText_(answer));
+    lines.push('*' + escapeSlackText_(field.label) + '*\n' + escapeSlackText_(answer));
   });
+  Object.keys(answers).forEach(function (question) {
+    if (fixed[question] || !answers[question]) return;
+    lines.push('*' + escapeSlackText_(question) + '*\n' + escapeSlackText_(answers[question]));
+  });
+
   // 投稿者本人が師匠のときは、自分へのメンションは付けない
   const mentions = (masterIds || []).filter(function (id) { return id !== authorId; });
-  if (settings.masterLine && mentions.length > 0) {
-    lines.push(settings.masterLine.split('{masters}').join(mentions.map(function (id) {
+  if (mentions.length > 0) {
+    lines.push(VIZ_POST_MASTER_LINE.split('{masters}').join(mentions.map(function (id) {
       return '<@' + id + '>';
     }).join(' ')));
   }
-  if (settings.footer) lines.push(settings.footer);
+  lines.push(VIZ_POST_FOOTER);
   return lines.join('\n\n');
-}
-
-/**
- * Slack の特殊文字を無害化する。回答に <!channel> などが書かれていても
- * メンションとして働かせないため（URL は < > で囲まなくても自動でリンクになる）
- */
-function escapeSlackText_(text) {
-  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function postVizMessage_(config, channelId, settings, text) {
@@ -472,9 +479,6 @@ function readVizSettings_(spreadsheet) {
     faqUrl: raw.FAQ_URL,
     formDescription: raw.FORM_DESCRIPTION,
     sectionDescription: raw.SECTION_DESCRIPTION,
-    header: raw.HEADER,
-    masterLine: raw.MASTER_LINE,
-    footer: raw.FOOTER,
     // 数字でない・範囲外の値は0（すぐ削除）に倒す。回答を残す側には倒さない
     retentionDays: /^\d{1,3}$/.test(raw.RETENTION_DAYS) && Number(raw.RETENTION_DAYS) <= 365
       ? Number(raw.RETENTION_DAYS) : 0,
@@ -512,57 +516,6 @@ function ensureVizSettingRows_(sheet) {
   }
 }
 
-/** 「ナイスチャレンジ投稿項目」を読む。並びがそのまま投稿の並び */
-function readVizFields_(spreadsheet) {
-  const sheet = spreadsheet.getSheetByName(SHEET_VIZ_FIELDS);
-  if (!sheet) return [];
-  const values = sheet.getDataRange().getValues();
-  const fields = [];
-  for (let i = 1; i < values.length; i++) {
-    const question = String(values[i][VIZ_FIELD_COL.QUESTION] || '').trim();
-    if (!question) continue;
-    fields.push({
-      question: question,
-      label: String(values[i][VIZ_FIELD_COL.LABEL] || '').trim(),
-      enabled: isEnabledFlag_(values[i][VIZ_FIELD_COL.ENABLED])
-    });
-  }
-  return fields;
-}
-
-/**
- * 「ナイスチャレンジ投稿項目」に、まだ無い設問の行を末尾へ足す。既存の行（見出し・並び・有効）は触らない。
- * 投稿者のSlackユーザーIDの設問は呼び出し側が除いて渡す。
- */
-function ensureVizFieldRows_(spreadsheet, questions) {
-  const sheet = getOrCreateSheet_(spreadsheet, SHEET_VIZ_FIELDS, VIZ_FIELDS_HEADER);
-  const known = readVizFields_(spreadsheet).map(function (f) { return f.question; });
-  const missing = questions.filter(function (q) { return q && known.indexOf(q) === -1; });
-  if (missing.length === 0) return;
-  // 見出しは、bootstrap() が作るフォームの設問だけ既定値を入れる（それ以外は空欄＝設問名のまま）
-  sheet.getRange(sheet.getLastRow() + 1, 1, missing.length, VIZ_FIELD_COL.LABEL + 1)
-    .setValues(missing.map(function (q) { return [q, VIZ_DEFAULT_FIELD_LABELS[q] || '']; }));
-  setupEnabledColumn_(sheet, VIZ_FIELD_COL.ENABLED);
-}
-
-/**
- * フォームの設問を「ナイスチャレンジ投稿項目」へ反映する（フォームを差し替えた・設問を足したとき）。
- * セクション区切りや画像など回答を持たない設問、投稿者のSlackユーザーIDの設問は入れない。
- */
-function syncVizFields_(spreadsheet, settings) {
-  if (!settings || !settings.formId) return 0;
-  const form = FormApp.openById(settings.formId);
-  const questions = form.getItems().filter(function (item) {
-    const type = item.getType();
-    return type !== FormApp.ItemType.PAGE_BREAK && type !== FormApp.ItemType.SECTION_HEADER &&
-      type !== FormApp.ItemType.IMAGE && type !== FormApp.ItemType.VIDEO &&
-      item.getTitle() !== settings.authorQuestion;
-  }).map(function (item) { return item.getTitle(); });
-  const before = readVizFields_(spreadsheet).length;
-  ensureVizFieldRows_(spreadsheet, questions);
-  return readVizFields_(spreadsheet).length - before;
-}
-
 // ==================== トリガーと反映 ====================
 
 /**
@@ -596,7 +549,7 @@ function syncVizFormTrigger_(config, settings) {
 
 /**
  * 「ナイスチャレンジ設定」を編集したときの反映（編集トリガーから呼ばれる）。
- * フォームIDが変わったら、トリガーと投稿項目をその場で追随させる。
+ * フォームIDが変わったら、送信トリガーをその場で追随させる。
  */
 function syncVizSettings_(spreadsheet) {
   const config = getConfig_();
@@ -606,8 +559,6 @@ function syncVizSettings_(spreadsheet) {
   try {
     message = syncVizFormTrigger_(config, settings);
     applyVizFormSettings_(settings);
-    const added = syncVizFields_(spreadsheet, settings);
-    if (added > 0) message += '（投稿項目に ' + added + '件の設問を追加しました）';
     refreshVizPrefill_(settings);
     applyVizFormTexts_(settings);
     syncVizRoomChoices_(spreadsheet, settings);
@@ -628,12 +579,10 @@ function applyVizFormSettings_(settings) {
   FormApp.openById(settings.formId).setAllowResponseEdits(settings.retentionDays > 0);
 }
 
-/** 初回セットアップ・setupTriggers から呼ぶ。シートを整え、フォームの設問を投稿項目へ写す */
+/** 初回セットアップ・setupTriggers から呼ぶ。シートを整え、送信トリガーとフォームの表示を設定に合わせる */
 function setupVizReview_(config) {
   const spreadsheet = SpreadsheetApp.openById(config.managementSpreadsheetId);
   ensureVizSettingRows_(getOrCreateSheet_(spreadsheet, SHEET_VIZ_SETTINGS, VIZ_SETTINGS_HEADER));
-  const fields = getOrCreateSheet_(spreadsheet, SHEET_VIZ_FIELDS, VIZ_FIELDS_HEADER);
-  setupEnabledColumn_(fields, VIZ_FIELD_COL.ENABLED);
   const log = getOrCreateSheet_(spreadsheet, SHEET_VIZ_LOG, VIZ_LOG_HEADER);
   ensureHeader_(log, VIZ_LOG_HEADER);
   protectSystemSheet_(log);
@@ -646,12 +595,11 @@ function setupVizReview_(config) {
   try {
     syncVizFormTrigger_(config, settings);
     applyVizFormSettings_(settings);
-    syncVizFields_(spreadsheet, settings);
     refreshVizPrefill_(settings);
     applyVizFormTexts_(settings);
     syncVizRoomChoices_(spreadsheet, settings);
   } catch (err) {
-    console.warn('ナイスチャレンジのフォームの設問を「ナイスチャレンジ投稿項目」へ反映できませんでした: ' + err);
+    console.warn('ナイスチャレンジのフォームを設定へ反映できませんでした: ' + err);
   }
 }
 
@@ -875,6 +823,9 @@ function createVizForm_() {
   form.setCollectEmail(false);            // メールアドレスは集めない（個人情報を持たない）
   form.setAllowResponseEdits(true);       // 期間中は、編集用URLから回答を直すと投稿も直る
   form.setLimitOneResponsePerUser(false); // 何作品でも依頼できるように
+  // 全員に同じ文言が出る。IDの打ち間違いは投稿されないことで気づいてもらうので、その案内を書いておく
+  form.setConfirmationMessage('回答を記録しました。ナイスチャレンジの投稿先チャンネルに投稿されない場合は、' +
+    '「' + VIZ_FORM_TITLES.AUTHOR + '」の入力を確認して、もう一度送信してください。');
   vizFormSpec_().forEach(function (spec) { addFormItem_(form, spec); });
   const author = findFormItemByTitle_(form, VIZ_FORM_TITLES.AUTHOR).asTextItem();
   author.setHelpText('Slackで ' + VIZ_SLASH_COMMAND + ' と打つと、この欄が入力済みのフォームが開けます。' +
@@ -900,7 +851,7 @@ function ensureVizForm_(config) {
   const formId = createVizForm_();
   const labels = sheet.getDataRange().getValues().map(function (row) { return String(row[0]).trim(); });
   sheet.getRange(labels.indexOf(VIZ_SETTING_ITEMS[0].label) + 1, 2).setValue(formEditUrl_(formId));
-  setupVizReview_(config); // トリガーと投稿項目を、できたフォームに合わせる
+  setupVizReview_(config); // 送信トリガーなどを、できたフォームに合わせる
   return 'ナイスチャレンジ用フォーム: 新規作成 (' + formId + ')';
 }
 
