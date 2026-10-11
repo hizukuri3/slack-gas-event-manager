@@ -90,6 +90,22 @@ function applyFormHints_(formId, vcRoomChoices, displayTitle) {
   form.getItems().forEach(function (item) {
     const title = item.getTitle();
 
+    if (title === FORM_TITLES.ORGANIZER) {
+      item.setHelpText(
+        'Slackで /event と打つと、この欄が入力済みのフォームが開けます。' +
+        '手で入れるときは、Slackのプロフィール →「︙」→「メンバーIDをコピー」で調べられます（U から始まる文字列）。' +
+        '編集用URLなどのDMの送り先に使います。'
+      );
+      if (item.getType() === FormApp.ItemType.TEXT) {
+        // 受け付ける形は normalizeSlackUserId_ に合わせる。Slackからコピーして貼ると
+        // <@U123> や @U123 の形になるので、それも通す（サーバー側で U123 に揃える）
+        item.asTextItem().setValidation(FormApp.createTextValidation()
+          .setHelpText('SlackユーザーIDを入力してください（U から始まる文字列）。')
+          .requireTextMatchesPattern('^\\s*(<@|@)?[UWuw][A-Za-z0-9]{4,}(\\|[^>]*)?>?\\s*$')
+          .build());
+      }
+    }
+
     if (title === FORM_TITLES.FORMAT) {
       // セクションがあれば選択肢は applyFormSections_ が行き先付きで貼っている。
       // ここで値だけ貼り直すと行き先が消えるので、無いときだけ貼る
