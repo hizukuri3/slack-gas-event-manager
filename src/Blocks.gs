@@ -5,7 +5,11 @@
  * 状態変化のたびに chat.update で再描画する。
  */
 
-/** Slack mrkdwn 用エスケープ */
+/**
+ * Slack mrkdwn 用エスケープ。回答に <!channel> などが書かれていても
+ * メンションとして働かせないため（URL は < > で囲まなくても自動でリンクになる）。
+ * 告知（Blocks.gs）とナイスチャレンジの投稿（VizReview.gs）で共用する
+ */
 function escapeSlackText_(text) {
   return String(text || '')
     .replace(/&/g, '&amp;')

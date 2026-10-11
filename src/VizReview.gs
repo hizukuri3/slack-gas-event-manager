@@ -190,14 +190,6 @@ function buildVizPostText_(answers, authorId, masterIds) {
   return lines.join('\n\n');
 }
 
-/**
- * Slack の特殊文字を無害化する。回答に <!channel> などが書かれていても
- * メンションとして働かせないため（URL は < > で囲まなくても自動でリンクになる）
- */
-function escapeSlackText_(text) {
-  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 function postVizMessage_(config, channelId, settings, text) {
   const payload = { channel: channelId, text: text };
   if (settings.botName) payload.username = settings.botName;
