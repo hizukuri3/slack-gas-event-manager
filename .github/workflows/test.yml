@@ -1,0 +1,21 @@
+name: Test
+
+# PRの時点で、純粋な判定ロジックのテストと静的な点検を走らせる。
+# GASへの配布（deploy.yml）とは別。ここは何も配らない。
+on:
+  pull_request:
+    branches: [dev, prod]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Test
+        run: npm test

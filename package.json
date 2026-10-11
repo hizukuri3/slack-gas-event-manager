@@ -1,0 +1,8 @@
+{
+  "name": "slack-gas-event-manager",
+  "private": true,
+  "description": "コミュニティ運営サポートBot（Slack + GAS）。GASへは clasp で src/ を配る。ここにはテストだけがある",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
