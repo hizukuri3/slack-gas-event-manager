@@ -630,9 +630,11 @@ function handleEventEdit_(config, existing, answers, formResponse) {
   const prevEnd = existing.end;
   // 変更前のVC部屋。取り直しで変わったら参加者へ周知する必要がある
   const prevRoom = existing.vcRoom;
+  // すでに中止になっていたか。中止済みの再送信で、中止の通知を繰り返さないために使う
+  const wasCancelled = isCancelledStatus_(existing.status);
   // 中止から「開催」へ戻す編集か。中止の間その部屋は空き扱いになっており、
   // 他のイベントに取られている可能性があるため、復活時は必ず取り直す
-  const revived = isCancelledStatus_(existing.status) && !isCancelledStatus_(answers.status);
+  const revived = wasCancelled && !isCancelledStatus_(answers.status);
   // 開催時間そのものが変わったか（開催形式の変更は含めない。参加者への時間変更周知の判定に使う）
   const timeChanged =
     existing.start.getTime() !== answers.start.getTime() ||
@@ -662,7 +664,7 @@ function handleEventEdit_(config, existing, answers, formResponse) {
     // シートには部屋名を残す（中止の告知に会場を出したままにするため）。
     // 「開催」へ戻す編集は上の revived で必ず取り直すので、空いた部屋を
     // 持ったまま復活することはない
-    cancelEvent_(config, ev);
+    cancelEvent_(config, ev, wasCancelled);
     return;
   }
 
@@ -782,8 +784,23 @@ function notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom) {
   });
 }
 
-/** イベント中止処理：カレンダー削除（分割予定を含む全件）・シート更新・Slack告知へ【中止】追記 */
-function cancelEvent_(config, ev) {
+/**
+ * イベント中止処理：カレンダー削除（分割予定を含む全件）・シート更新・Slack告知へ【中止】追記。
+ * 告知スレッドの投稿では、参加登録中・キャンセル待ちの人をメンションする。
+ * ボタンを押しただけの人はスレッドを購読していないので、メンションしないと通知が届かない。
+ * @param {boolean} wasCancelled すでに中止だったか。そうなら、シートと告知の更新だけ行い、
+ *   カレンダー削除・中止の投稿・主催者へのDMは繰り返さない
+ */
+function cancelEvent_(config, ev, wasCancelled) {
+  if (wasCancelled) {
+    updateEvent_(config, ev);
+    if (ev.slackTs) refreshAnnouncement_(config, ev);
+    return;
+  }
+
+  // 中止にした時点の参加者を、カレンダー削除などより前に控えておく
+  const participants = listParticipants_(config, ev.eventId);
+
   deleteCalendarEvents_(config, ev);
   updateEvent_(config, ev); // ステータス「中止」を記録 → 以降のスタンプ検知はスキップされる
 
@@ -792,7 +809,7 @@ function cancelEvent_(config, ev) {
     refreshAnnouncement_(config, ev);
     postMessage_(
       config, ev.slackChannel,
-      ':no_entry: イベント「' + ev.title + '」は中止になりました。',
+      ':no_entry: イベント「' + ev.title + '」は中止になりました。' + buildCancelMentions_(participants),
       ev.slackTs
     );
   }
@@ -801,5 +818,20 @@ function cancelEvent_(config, ev) {
     config, ev.organizer,
     ':no_entry: イベント「' + ev.title + '」を中止として処理しました（カレンダー削除・告知更新済み）。'
   );
+}
+
+/**
+ * 中止の投稿に付ける、参加者へのメンション（改行から始まる文字列。誰もいなければ空文字）。
+ * 運営として参加した人は「参加登録」に含める。
+ * @param {Array} participants listParticipants_ の結果
+ */
+function buildCancelMentions_(participants) {
+  const mention = function (p) { return '<@' + p.userId + '>'; };
+  const joined = participants.filter(function (p) { return p.status !== PSTATUS.WAITLIST; });
+  const waiting = participants.filter(function (p) { return p.status === PSTATUS.WAITLIST; });
+  let text = '';
+  if (joined.length > 0) text += '\n参加登録: ' + joined.map(mention).join(' ');
+  if (waiting.length > 0) text += '\nキャンセル待ち: ' + waiting.map(mention).join(' ');
+  return text;
 }
 
