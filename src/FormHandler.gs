@@ -589,15 +589,25 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
   const participantsUrl = buildParticipantsPageUrl_(config, eventId);
   const msg = buildAnnouncementBlocks_(ev, [], participantsUrl, buildCalendarViewUrl_(config));
   const ts = postMessage_(config, config.slackChannelId, msg.text, null, msg.blocks);
-  if (ts) {
-    ev.slackTs = ts;
+  if (!ts) {
+    // 告知が出ないイベントは、誰も参加登録できないのに、主催者には「登録しました」と届いてしまう。
+    // 作ったカレンダー予定を消し、シートにも書かずに差し戻す。シートに無いので、同じ編集用URLから
+    // 再送信すれば新規登録としてやり直せる（既存イベントの編集としては扱われない）
+    console.error('Slackへの告知を投稿できませんでした。登録を取り消します: ' + ev.eventId);
+    deleteCalendarEvents_(config, ev);
+    notifyFormError_(config, formResponse, [
+      'Slackへ告知を投稿できなかったため、登録しませんでした。' +
+      '少し時間をおいて、同じURLからもう一度送信してください。' +
+      '何度やっても同じ場合は、運営にお問い合わせください。']);
+    return;
   }
+  ev.slackTs = ts;
 
   // 3. スプレッドシートへ記録（管理用・公開用の両方）
   insertEvent_(config, ev);
 
   // 4. カレンダー説明欄に概要・参加者確認URL・Slackパーマリンクを書き込み
-  const permalink = ts ? getPermalink_(config, config.slackChannelId, ts) : '';
+  const permalink = getPermalink_(config, config.slackChannelId, ts);
   patchCalendarDescriptions_(config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
 
   // 5. 主催者へ回答編集用URLをDMで通知
