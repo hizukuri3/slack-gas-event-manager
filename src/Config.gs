@@ -234,10 +234,31 @@ const VIZ_SLASH_COMMAND = '/review';
 // ここは bootstrap() が作るフォームの既定値と、設定シートの既定値にだけ使う
 const VIZ_FORM_TITLES = {
   AUTHOR: '投稿者のSlackユーザーID',
-  NAME: 'Vizのタイトル',
-  URL: 'VizのURL',
-  POINT: 'レビューしてほしい点'
+  ROOM: '所属部屋',
+  SECTION: 'フィードバックを受けたい内容の記載',
+  LINK: '成果物のリンクなどを記載してください（※必須）',
+  TARGET: 'FB（フィードバック）を受けたい対象は？（※必須）',
+  STATE: '成果物はどんな状態ですか？（※必須）',
+  WANT: 'どのようなFB（フィードバック）が欲しいですか？（必須）',
+  CONSULT: '相談内容をひとことで！（任意）'
 };
+
+// 投稿に出す見出しの既定値。bootstrap() が作るフォームの設問名は注記つきで長いので、
+// 「ナイスチャレンジ投稿項目」に行を足すときだけ、これを見出しに入れる（後から運営が直せる）
+const VIZ_DEFAULT_FIELD_LABELS = {};
+VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.ROOM] = '所属部屋';
+VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.LINK] = '成果物のリンク';
+VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.TARGET] = 'FBを受けたい対象';
+VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.STATE] = '成果物の状態';
+VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.WANT] = '欲しいFB';
+VIZ_DEFAULT_FIELD_LABELS[VIZ_FORM_TITLES.CONSULT] = '相談内容';
+
+// フォームの説明文の中で、設定シートのリンクに置き換わる印
+const VIZ_PLACEHOLDER_CHANNEL = '{ナイスチャレンジ}';
+const VIZ_PLACEHOLDER_FAQ = '{よくある質問}';
+
+// 所属部屋の表記の中で、師匠リストの「表示名」に置き換わる印
+const VIZ_PLACEHOLDER_MASTER = '{師匠名}';
 
 // ---- ナイスチャレンジ設定の項目 ----
 // 人が編集するシート（項目 / 値 / 説明 の3列）。コードは項目名の完全一致で値を探す。
@@ -253,6 +274,35 @@ const VIZ_SETTING_ITEMS = [
   { key: 'AUTHOR_QUESTION', label: '投稿者のSlackユーザーIDの設問名', value: VIZ_FORM_TITLES.AUTHOR,
     note: '投稿者本人のSlackユーザーID（U始まり）を入力してもらう設問名（完全一致）。投稿者のメンションと、本人のスタンプ・返信の除外に使います。' +
       '投稿には載せません。スラッシュコマンド（' + VIZ_SLASH_COMMAND + '）で開いたフォームには自動で入ります' },
+  { key: 'CHANNEL_URL', label: 'ナイスチャレンジのチャンネルのリンク', value: '',
+    note: 'フォームの説明文の ' + VIZ_PLACEHOLDER_CHANNEL + ' に入るSlackチャンネルのリンク。' +
+      'チャンネルを右クリック →「リンクをコピー」で取れます。空欄なら「ナイスチャレンジのチャンネル」という文字になります' },
+  { key: 'FAQ_URL', label: 'よくある質問のチャンネルのリンク', value: '',
+    note: 'フォームの説明文の ' + VIZ_PLACEHOLDER_FAQ + ' に入るSlackチャンネルのリンク。空欄なら「よくある質問のチャンネル」という文字になります' },
+  { key: 'FORM_DESCRIPTION', label: 'フォームの説明文（冒頭）', value:
+      'このフォームはナイスチャレンジチャンネルの専用投稿フォームになります。\n' +
+      'ナイスチャレンジチャンネルは、互いをリスペクトしフィードバックし合うチャンネルです。\n' +
+      '作成物に対して広くフィードバックをもらいたい場合に活用してください。\n' +
+      'ここで記入した内容は ' + VIZ_PLACEHOLDER_CHANNEL + ' に投稿されます。\n' +
+      'フィードバック内容は ' + VIZ_PLACEHOLDER_CHANNEL + ' で確認してください。\n\n' +
+      'よくあるコメントは ' + VIZ_PLACEHOLDER_FAQ + ' を参照してください。\n\n' +
+      'Slackで ' + VIZ_SLASH_COMMAND + ' と打つと、投稿者のSlackユーザーIDが入力済みのこのフォームが開きます。\n' +
+      '手で入れるときは、Slackのプロフィール →「︙」→「メンバーIDをコピー」で調べてください。\n' +
+      '\n' +
+      'チャンネルへの投稿時には、Slack名がメンションとして表示されます。',
+    note: 'フォームの先頭に出る説明。' + VIZ_PLACEHOLDER_CHANNEL + ' と ' + VIZ_PLACEHOLDER_FAQ +
+      ' は、上のリンクに置き換わります。この欄を書き換えると、フォームの説明がその場で書き換わります。' +
+      '空欄ならフォーム側の説明には触りません' },
+  { key: 'SECTION_DESCRIPTION', label: 'フォームの説明文（2ページ目）', value:
+      'フィードバックを受けたい内容を入力してください。\n' +
+      'ここで記入した内容は ' + VIZ_PLACEHOLDER_CHANNEL + ' に投稿されます。\n' +
+      'フィードバック内容は ' + VIZ_PLACEHOLDER_CHANNEL + ' の投稿への返信で確認してください。',
+    note: '「' + VIZ_FORM_TITLES.SECTION + '」セクションの説明。置き換わる印は冒頭の説明文と同じです。' +
+      '空欄ならフォーム側の説明には触りません' },
+  { key: 'ROOM_FORMAT', label: '所属部屋の表記', value: VIZ_PLACEHOLDER_MASTER + '部屋',
+    note: 'フォームの「' + VIZ_FORM_TITLES.ROOM + '」の選択肢の書き方。' + VIZ_PLACEHOLDER_MASTER +
+      ' が、「師匠リスト」の有効な師匠の「表示名」に置き換わります（表示名が空の行は出ません）。' +
+      '例: 「' + VIZ_PLACEHOLDER_MASTER + '部屋」→「田中部屋」。師匠リストを編集すると、フォームの選択肢がその場で貼り直されます' },
   { key: 'HEADER', label: '冒頭の文', value: '{author} さんがVizのレビューを募集しています :eyes:',
     note: '{author} が投稿者のメンションに置き換わります（本人を特定できなかったときは「メンバー」）。空欄なら冒頭なし' },
   { key: 'MASTER_LINE', label: '師匠へのメンションの文', value: '{masters} レビューをお願いします :pray:',
