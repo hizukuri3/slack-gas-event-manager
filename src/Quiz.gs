@@ -14,26 +14,40 @@
 
 // ==================== 出題 ====================
 
-/** 時間主導トリガー（毎時）から呼ばれる。条件を満たせば1問出題する */
+/**
+ * 時間主導トリガー（毎時）から呼ばれる。条件を満たせば1問出題し、
+ * 「クイズ設定」の「次の出題」表示を今の状態に更新する
+ */
 function postDailyQuiz() {
   const config = getConfig_();
   const spreadsheet = SpreadsheetApp.openById(config.managementSpreadsheetId);
+  try {
+    postQuizIfDue_(config, spreadsheet);
+  } finally {
+    // 表示の更新に失敗しても、出題の結果（例外）を隠さない
+    try {
+      refreshQuizNextLabel_(spreadsheet);
+    } catch (err) {
+      console.warn('「次の出題」の表示を更新できませんでした: ' + err);
+    }
+  }
+}
+
+function postQuizIfDue_(config, spreadsheet) {
   const settings = readQuizSettings_(spreadsheet);
   if (!settings || !settings.channel) return;
-
-  const now = new Date();
-  if (settings.postHour === null) {
-    console.warn('クイズ設定の「投稿時刻」が 0〜23 の数字ではないため出題しません');
-    return;
-  }
-  if (now.getHours() < settings.postHour) return;
-  const day = now.getDay(); // 0:日, 6:土（スクリプトのタイムゾーン Asia/Tokyo で判定される）
-  if (settings.skipWeekends && (day === 0 || day === 6)) return;
 
   const sheet = spreadsheet.getSheetByName(SHEET_QUIZ_QUESTIONS);
   if (!sheet) return;
   const values = sheet.getDataRange().getValues();
-  if (hasPostedOn_(values, now)) return;
+  const now = new Date();
+
+  // 出すかどうかの判定は planQuiz_ に一本化している（「次の出題」の表示と同じ判定を使うため）
+  const plan = planQuiz_(settings, values, now);
+  if (!plan.shouldPostNow) {
+    if (plan.warning) console.warn(plan.warning);
+    return;
+  }
 
   const channelId = resolveChannelId_(config, settings.channel);
   if (!channelId) {
@@ -96,6 +110,173 @@ function hasPostedOn_(values, now) {
 
 function formatQuizDate_(date) {
   return Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+// ==================== 出題の予定（判定と「次の出題」の表示） ====================
+
+const QUIZ_DAY_MS = 24 * 60 * 60 * 1000;
+const QUIZ_WEEKDAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
+
+/** 年月日を通し番号の日数にする（タイムゾーンに左右されない） */
+function quizDayNumber_(year, month, day) {
+  return Math.round(Date.UTC(year, month - 1, day) / QUIZ_DAY_MS);
+}
+
+/** 通し番号の日数を「10/13(月)」の形にする */
+function formatQuizDay_(dayNumber) {
+  const date = new Date(dayNumber * QUIZ_DAY_MS);
+  return (date.getUTCMonth() + 1) + '/' + date.getUTCDate() + '(' + QUIZ_WEEKDAY_NAMES[date.getUTCDay()] + ')';
+}
+
+/**
+ * クイズ設定とクイズ問題シートの内容から、今出すかどうかと「次の出題」の表示を決める。
+ * 判定の本体は computeQuizSchedule_（純粋関数）で、ここはシートの値を渡すだけ。
+ * @param {Object} settings readQuizSettings_ の結果
+ * @param {Array} values クイズ問題シートの getValues()
+ * @param {Date} now 現在日時（スクリプトのタイムゾーン）
+ */
+function planQuiz_(settings, values, now) {
+  // 次に出す問題。出題のループと同じく、状態が埋まった行・空行・問題文が空の行は対象外
+  let hasQuestion = false;
+  let nextNumber = '';
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    if (String(row[QUIZ_COL.STATUS] || '').trim() !== '') continue;
+    const text = String(row[QUIZ_COL.TEXT] || '').trim();
+    if (!text) continue;
+    hasQuestion = true;
+    nextNumber = String(row[QUIZ_COL.NUMBER] || '').trim();
+    break;
+  }
+  return computeQuizSchedule_({
+    channel: settings.channel,
+    run: settings.run,
+    startDate: settings.startDate,
+    startDateInvalid: settings.startDateInvalid,
+    postHour: settings.postHour,
+    skipWeekends: settings.skipWeekends,
+    now: { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate(), hour: now.getHours() },
+    postedToday: hasPostedOn_(values, now),
+    hasQuestion: hasQuestion,
+    nextNumber: nextNumber
+  });
+}
+
+/**
+ * 出題の予定を決める純粋関数（シートにもSlackにも触らない）。
+ * 出題の判定と、設定シートの「次の出題」の表示で同じ判定を使う（表示と実際がずれないように）。
+ *
+ * 出さないのは次のとき: 投稿先が空 / 「出題の切り替え」が「出題する」以外 /
+ * 「出題を始める日」が読めない・今日より先 / 投稿時刻が読めない / 土日は休む設定の土日 /
+ * 今日すでに出した / 時刻前 / 出す問題が無い。読めない値は、誤って出すより止める側に倒す。
+ *
+ * @param {Object} s
+ *   channel 投稿先チャンネル（空なら動かない）
+ *   run 「出題の切り替え」が「出題する」か
+ *   startDate {year, month, day} か null（「出題を始める日」。空欄は null）
+ *   startDateInvalid 「出題を始める日」が日付として読めなかったか
+ *   postHour 0〜23 か null（読めない値）
+ *   skipWeekends 土日は休むか
+ *   now {year, month, day, hour}
+ *   postedToday 今日すでに出題したか
+ *   hasQuestion 出題できる問題が残っているか
+ *   nextNumber 次に出す問題の番号（無ければ空文字）
+ * @return {{shouldPostNow: boolean, label: string, warning: string}}
+ *   label は「次の出題」に出す文言。warning は出さない理由がログに残すべきものであるとき
+ */
+function computeQuizSchedule_(s) {
+  const no = function (label, warning) {
+    return { shouldPostNow: false, label: label, warning: warning || '' };
+  };
+  if (!s.channel) return no('投稿先チャンネルが空のため、出題しません');
+  if (!s.run) return no('お休み中です');
+  if (s.startDateInvalid) {
+    return no('「出題を始める日」が日付として読めないため、出題しません',
+      'クイズ設定の「出題を始める日」が日付として読めないため出題しません');
+  }
+  if (s.postHour === null || s.postHour === undefined) {
+    return no('「投稿時刻」が0〜23の数字ではないため、出題しません',
+      'クイズ設定の「投稿時刻」が 0〜23 の数字ではないため出題しません');
+  }
+  if (!s.hasQuestion) return no('未出題の問題がありません');
+
+  const today = quizDayNumber_(s.now.year, s.now.month, s.now.day);
+  const isWeekend = function (dayNumber) {
+    const dow = new Date(dayNumber * QUIZ_DAY_MS).getUTCDay();
+    return dow === 0 || dow === 6;
+  };
+
+  // 次に出す日。今日出していれば明日以降、「出題を始める日」より前は始める日まで、土日は休むなら月曜まで
+  let day = s.postedToday ? today + 1 : today;
+  if (s.startDate) {
+    day = Math.max(day, quizDayNumber_(s.startDate.year, s.startDate.month, s.startDate.day));
+  }
+  while (s.skipWeekends && isWeekend(day)) day += 1;
+
+  const tail = s.nextNumber ? '(' + s.nextNumber + ')' : '';
+  const at = s.postHour + '時ごろ';
+  if (day === today) {
+    if (s.now.hour >= s.postHour) {
+      return { shouldPostNow: true, label: 'まもなく出題します' + tail, warning: '' };
+    }
+    return no('本日 ' + at + tail);
+  }
+  if (day === today + 1) return no('明日 ' + formatQuizDay_(day) + ' ' + at + tail);
+  return no(formatQuizDay_(day) + ' ' + at + tail);
+}
+
+/** 「クイズ設定」の「次の出題」を、いまの状態の表示に更新する（変わっていなければ書かない） */
+function refreshQuizNextLabel_(spreadsheet) {
+  const settingsSheet = spreadsheet.getSheetByName(SHEET_QUIZ_SETTINGS);
+  const questions = spreadsheet.getSheetByName(SHEET_QUIZ_QUESTIONS);
+  if (!settingsSheet || !questions) return;
+  const settings = readQuizSettings_(spreadsheet);
+  if (!settings) return;
+
+  const nextLabel = quizSettingItem_('NEXT').label;
+  const rows = settingsSheet.getDataRange().getValues();
+  let rowNumber = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i][0] || '').trim() === nextLabel) {
+      rowNumber = i + 1;
+      break;
+    }
+  }
+  if (!rowNumber) return;
+
+  const label = planQuiz_(settings, questions.getDataRange().getValues(), new Date()).label;
+  const cell = settingsSheet.getRange(rowNumber, 2);
+  if (String(cell.getValue()) !== label) cell.setValue(label);
+}
+
+/** QUIZ_SETTING_ITEMS から、key の項目を返す */
+function quizSettingItem_(key) {
+  return QUIZ_SETTING_ITEMS.filter(function (item) { return item.key === key; })[0];
+}
+
+/**
+ * 「出題を始める日」のセルの値を読む。日付のセルは Date で、手で書かれた文字は
+ * yyyy/M/d か yyyy-M-d の形だけ受ける。空欄は「指定なし」。読めない値は invalid にして、
+ * 出題を止める側に倒す（日付を間違えたまま、気づかず出してしまわないため）。
+ * @return {{date: ?{year: number, month: number, day: number}, invalid: boolean}}
+ */
+function parseQuizStartDate_(value) {
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    if (isNaN(value.getTime())) return { date: null, invalid: true };
+    return { date: { year: value.getFullYear(), month: value.getMonth() + 1, day: value.getDate() }, invalid: false };
+  }
+  const text = String(value === null || value === undefined ? '' : value).trim();
+  if (!text) return { date: null, invalid: false };
+  const m = text.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
+  if (!m) return { date: null, invalid: true };
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const check = new Date(Date.UTC(year, month - 1, day));
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) {
+    return { date: null, invalid: true };   // 2月30日など
+  }
+  return { date: { year: year, month: month, day: day }, invalid: false };
 }
 
 /** 出題できなかった行に理由を書く。「状態」が埋まるので以後の出題対象から外れる */
@@ -170,18 +351,34 @@ function readQuizSettings_(spreadsheet) {
   if (!sheet) return null;
 
   const byLabel = {};
+  const rawByLabel = {};   // 日付のセルは文字にせず、そのまま（Date）読みたい
   sheet.getDataRange().getValues().forEach(function (row) {
-    byLabel[String(row[0] || '').trim()] = String(row[1]).trim();
+    const label = String(row[0] || '').trim();
+    byLabel[label] = String(row[1]).trim();
+    rawByLabel[label] = row[1];
   });
   const raw = {};
   QUIZ_SETTING_ITEMS.forEach(function (item) {
     raw[item.key] = Object.prototype.hasOwnProperty.call(byLabel, item.label)
       ? byLabel[item.label] : item.value;
   });
+  const startDateLabel = quizSettingItem_('START_DATE').label;
+  let startDateRaw = Object.prototype.hasOwnProperty.call(rawByLabel, startDateLabel)
+    ? rawByLabel[startDateLabel] : '';
+  if (Object.prototype.toString.call(startDateRaw) === '[object Date]' && !isNaN(startDateRaw.getTime())) {
+    // 日付のセルの値は、シートのタイムゾーンの0時。スクリプトのタイムゾーンと違っても
+    // 選んだ日付がずれないように、シートのタイムゾーンで年月日を取り出す
+    startDateRaw = Utilities.formatDate(startDateRaw, spreadsheet.getSpreadsheetTimeZone(), 'yyyy/MM/dd');
+  }
+  const startDate = parseQuizStartDate_(startDateRaw);
 
   const hour = /^\d{1,2}$/.test(raw.POST_HOUR) ? Number(raw.POST_HOUR) : -1;
   return {
     channel: raw.CHANNEL,
+    // 「出題する」と書かれているときだけ出す。空欄や書き間違いは、誤って出すより止める側に倒す
+    run: raw.RUN === QUIZ_RUN_ON,
+    startDate: startDate.date,
+    startDateInvalid: startDate.invalid,
     postHour: (hour >= 0 && hour <= 23) ? hour : null,
     // 「いいえ」と書かれたときだけ土日も出す。迷う値は休む側に倒す
     skipWeekends: raw.SKIP_WEEKENDS !== 'いいえ',
@@ -203,20 +400,39 @@ function ensureQuizSettingRows_(sheet) {
   });
   QUIZ_SETTING_ITEMS.forEach(function (item) {
     if (labels.indexOf(item.label) !== -1) return;
-    sheet.appendRow([item.label, item.value, item.note]);
-    labels.push(item.label);
+    // after が指定された項目は、その項目の下に入れる（稼働中のシートでも、関連する設定が並ぶように）
+    const afterIndex = item.after ? labels.indexOf(item.after) : -1;
+    if (afterIndex !== -1) {
+      sheet.insertRowAfter(afterIndex + 1);
+      sheet.getRange(afterIndex + 2, 1, 1, 3).setValues([[item.label, item.value, item.note]]);
+      labels.splice(afterIndex + 1, 0, item.label);
+    } else {
+      sheet.appendRow([item.label, item.value, item.note]);
+      labels.push(item.label);
+    }
   });
 
-  // 「土日は休む」の値はドロップダウンにする。「休む」「×」などと書いて
-  // 止めたつもりになるのを防ぐ（判定できない値は readQuizSettings_ が休む側に倒す）
-  const row = labels.indexOf('土日は休む');
-  if (row !== -1) {
+  // 「土日は休む」と「出題の切り替え」の値はドロップダウンにする。「休む」「×」などと書いて
+  // 止めたつもりになるのを防ぐ（判定できない値は readQuizSettings_ が止める側に倒す）
+  const setList = function (label, choices) {
+    const row = labels.indexOf(label);
+    if (row === -1) return;
     sheet.getRange(row + 1, 2).setDataValidation(
       SpreadsheetApp.newDataValidation()
-        .requireValueInList(QUIZ_SKIP_WEEKENDS_CHOICES, true)
+        .requireValueInList(choices, true)
         .setAllowInvalid(false)
         .build()
     );
+  };
+  setList(quizSettingItem_('SKIP_WEEKENDS').label, QUIZ_SKIP_WEEKENDS_CHOICES);
+  setList(quizSettingItem_('RUN').label, QUIZ_RUN_CHOICES);
+
+  // 「出題を始める日」は、セルを選ぶとカレンダーから選べる日付にする
+  const startRow = labels.indexOf(quizSettingItem_('START_DATE').label);
+  if (startRow !== -1) {
+    sheet.getRange(startRow + 1, 2)
+      .setNumberFormat('yyyy/MM/dd')
+      .setDataValidation(SpreadsheetApp.newDataValidation().requireDate().setAllowInvalid(false).build());
   }
 }
 
