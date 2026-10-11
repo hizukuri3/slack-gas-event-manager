@@ -467,6 +467,11 @@ function readVizSettings_(spreadsheet) {
     formId: parseFormId_(raw.FORM_ID),
     channel: raw.CHANNEL,
     authorQuestion: raw.AUTHOR_QUESTION || VIZ_FORM_TITLES.AUTHOR,
+    roomFormat: raw.ROOM_FORMAT || (VIZ_PLACEHOLDER_MASTER + '部屋'),
+    channelUrl: raw.CHANNEL_URL,
+    faqUrl: raw.FAQ_URL,
+    formDescription: raw.FORM_DESCRIPTION,
+    sectionDescription: raw.SECTION_DESCRIPTION,
     header: raw.HEADER,
     masterLine: raw.MASTER_LINE,
     footer: raw.FOOTER,
@@ -534,8 +539,9 @@ function ensureVizFieldRows_(spreadsheet, questions) {
   const known = readVizFields_(spreadsheet).map(function (f) { return f.question; });
   const missing = questions.filter(function (q) { return q && known.indexOf(q) === -1; });
   if (missing.length === 0) return;
-  sheet.getRange(sheet.getLastRow() + 1, 1, missing.length, VIZ_FIELD_COL.QUESTION + 1)
-    .setValues(missing.map(function (q) { return [q]; }));
+  // 見出しは、bootstrap() が作るフォームの設問だけ既定値を入れる（それ以外は空欄＝設問名のまま）
+  sheet.getRange(sheet.getLastRow() + 1, 1, missing.length, VIZ_FIELD_COL.LABEL + 1)
+    .setValues(missing.map(function (q) { return [q, VIZ_DEFAULT_FIELD_LABELS[q] || '']; }));
   setupEnabledColumn_(sheet, VIZ_FIELD_COL.ENABLED);
 }
 
@@ -603,6 +609,8 @@ function syncVizSettings_(spreadsheet) {
     const added = syncVizFields_(spreadsheet, settings);
     if (added > 0) message += '（投稿項目に ' + added + '件の設問を追加しました）';
     refreshVizPrefill_(settings);
+    applyVizFormTexts_(settings);
+    syncVizRoomChoices_(spreadsheet, settings);
   } catch (err) {
     // フォームを開けない（IDの誤り・権限なし）ときもここへ来る
     console.warn('ナイスチャレンジのフォームを反映できませんでした: ' + err);
@@ -640,8 +648,95 @@ function setupVizReview_(config) {
     applyVizFormSettings_(settings);
     syncVizFields_(spreadsheet, settings);
     refreshVizPrefill_(settings);
+    applyVizFormTexts_(settings);
+    syncVizRoomChoices_(spreadsheet, settings);
   } catch (err) {
     console.warn('ナイスチャレンジのフォームの設問を「ナイスチャレンジ投稿項目」へ反映できませんでした: ' + err);
+  }
+}
+
+// ==================== フォームの説明文・所属部屋の選択肢 ====================
+
+/** 説明文の {ナイスチャレンジ} {よくある質問} を、設定のリンク（無ければ名前）に置き換える */
+function renderVizDescription_(template, settings) {
+  return String(template)
+    .split(VIZ_PLACEHOLDER_CHANNEL).join(settings.channelUrl || 'ナイスチャレンジのチャンネル')
+    .split(VIZ_PLACEHOLDER_FAQ).join(settings.faqUrl || 'よくある質問のチャンネル');
+}
+
+/**
+ * 設定シートの説明文（冒頭・2ページ目）を、フォームへ書き込む。
+ * 説明文が空欄なら、フォーム側の説明には触らない（既存のフォームを手で整えている場合のため）。
+ * 2ページ目の説明は、セクション「VIZ_FORM_TITLES.SECTION」があるときだけ。
+ */
+function applyVizFormTexts_(settings) {
+  if (!settings || !settings.formId) return;
+  const form = FormApp.openById(settings.formId);
+  if (settings.formDescription) {
+    form.setDescription(renderVizDescription_(settings.formDescription, settings));
+  }
+  if (settings.sectionDescription) {
+    const section = findFormItemByTitle_(form, VIZ_FORM_TITLES.SECTION);
+    if (section && section.getType() === FormApp.ItemType.PAGE_BREAK) {
+      section.asPageBreakItem().setHelpText(renderVizDescription_(settings.sectionDescription, settings));
+    }
+  }
+}
+
+/** 「師匠リスト」の有効な行の表示名から、所属部屋の選択肢（並びは師匠リストのまま）を作る */
+function readVizRoomChoices_(spreadsheet, settings) {
+  const sheet = spreadsheet.getSheetByName(SHEET_MASTER_LIST);
+  if (!sheet) return [];
+  const format = (settings && settings.roomFormat) || (VIZ_PLACEHOLDER_MASTER + '部屋');
+  const values = sheet.getDataRange().getValues();
+  const choices = [];
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    if (!isEnabledFlag_(row[MASTER_LIST_COL.ENABLED])) continue;
+    const name = String(row[MASTER_LIST_COL.NAME] || '').trim();
+    if (!name) continue;
+    const label = format.split(VIZ_PLACEHOLDER_MASTER).join(name);
+    if (choices.indexOf(label) === -1) choices.push(label);
+  }
+  return choices;
+}
+
+/**
+ * フォームの「所属部屋」（プルダウン）の選択肢を、「師匠リスト」に合わせる。
+ * 師匠が0人のときは選択肢を変えない（FormApp は空の選択肢を受け付けないため）。
+ * 設問がない（運営が作ったフォーム等）ときも何もしない。
+ * @return {{count: number, applied: boolean}} count は選択肢の数、applied は反映できたか
+ */
+function syncVizRoomChoices_(spreadsheet, settings) {
+  const choices = readVizRoomChoices_(spreadsheet, settings);
+  const result = { count: choices.length, applied: false };
+  if (!settings || !settings.formId || choices.length === 0) return result;
+  const form = FormApp.openById(settings.formId);
+  const item = findFormItemByTitle_(form, VIZ_FORM_TITLES.ROOM);
+  if (!item || item.getType() !== FormApp.ItemType.LIST) return result;
+  item.asListItem().setChoiceValues(choices);
+  result.applied = true;
+  return result;
+}
+
+/**
+ * 「師匠リスト」を編集したとき（編集トリガーから呼ばれる）の、所属部屋の選択肢の反映。
+ * ナイスチャレンジのフォームが未設定のときは、何も出さない（師匠リストの編集のたびに
+ * 関係のないトーストを出さないため）。失敗しても師匠リストの反映は止めない。
+ */
+function syncVizRoomsFromSheet_(spreadsheet) {
+  try {
+    const settings = readVizSettings_(spreadsheet);
+    if (!settings || !settings.formId) return;
+    const result = syncVizRoomChoices_(spreadsheet, settings);
+    if (result.applied) {
+      spreadsheet.toast('所属部屋 ' + result.count + '件をフォームへ反映しました', SHEET_VIZ_SETTINGS, 8);
+    } else if (result.count === 0) {
+      spreadsheet.toast('師匠リストに表示名がある有効な行が無いため、所属部屋の選択肢は変えていません',
+        SHEET_VIZ_SETTINGS, 8);
+    }
+  } catch (err) {
+    console.warn('所属部屋の選択肢を反映できませんでした: ' + err);
   }
 }
 
@@ -741,9 +836,35 @@ function cleanupVizResponses() {
 function vizFormSpec_() {
   return [
     { title: VIZ_FORM_TITLES.AUTHOR, type: 'TEXT', required: true },
-    { title: VIZ_FORM_TITLES.NAME, type: 'TEXT', required: true },
-    { title: VIZ_FORM_TITLES.URL, type: 'TEXT', required: true },
-    { title: VIZ_FORM_TITLES.POINT, type: 'PARAGRAPH_TEXT', required: false }
+    // 選択肢は「師匠リスト」シートが正。師匠の表示名が入るまでは、この1つだけが並ぶ
+    { title: VIZ_FORM_TITLES.ROOM, type: 'LIST', required: true,
+      help: 'あなたの所属する部屋を選択してください。投稿は師匠にもメンションされます。',
+      choices: ['（「' + SHEET_MASTER_LIST + '」シートに師匠の表示名を入れてください）'] },
+    { title: VIZ_FORM_TITLES.SECTION, type: 'PAGE_BREAK' },
+    { title: VIZ_FORM_TITLES.LINK, type: 'TEXT', required: true },
+    { title: VIZ_FORM_TITLES.TARGET, type: 'LIST', required: true, choices: [
+      'パブリック Tableau PublicへのViz投稿',
+      'パブリック Tableau Community Forumsでの質問回答',
+      'パブリック Tableau関連のブログ記事の投稿',
+      'パブリック Tableauユーザー会の開催',
+      'パブリック Tableau関連の講演',
+      '組織内 イベント開催',
+      '組織内 Doctor開催',
+      '組織内 オンラインコミュニティ運営',
+      '組織内 Viz共有',
+      '組織内 情報共有',
+      '組織内 分析案件実施',
+      'その他'
+    ] },
+    { title: VIZ_FORM_TITLES.STATE, type: 'MULTIPLE_CHOICE', required: true, choices: [
+      'アイデア出し中', 'ドラフト作成中', '師匠レビュー依頼中', '師匠レビュー完了'
+    ] },
+    { title: VIZ_FORM_TITLES.WANT, type: 'MULTIPLE_CHOICE', required: true, choices: [
+      'ざっくり（方向性・イメージ）', 'しっかり（内容・構成）', 'ことば（表現チェック）',
+      'みため（体裁・デザイン）', '応用（発展アイデア・スキル）', '比較（他成果物の参考）'
+    ] },
+    { title: VIZ_FORM_TITLES.CONSULT, type: 'TEXT', required: false,
+      help: '（記入例）投稿するVizをもう少し改善したいのでアドバイスが欲しい' }
   ];
 }
 

@@ -157,7 +157,10 @@ function bootstrap() {
   logs.push('▼ ナイスチャレンジを使う場合: 管理用スプレッドシートの「ナイスチャレンジ設定」シートの「投稿先チャンネル」を入れてください。');
   logs.push('  入れるまでは動きません。そのチャンネルにはBotを招待してください（スタンプと返信が記録されません）。');
   logs.push('  フォームは「ナイスチャレンジ設定」に書かれたもの（上のログのURL）です。既存のフォームを使うなら、そのURLに書き換えます。');
-  logs.push('  フォームでは、Slackに登録しているメールアドレスを集めてください（「メールアドレスを収集する」設定でも、入力する設問でも構いません）。');
+  logs.push('  フォームには、投稿者のSlackユーザーIDを入力する設問が要ります（設問名は設定シートの「投稿者のSlackユーザーIDの設問名」と合わせます）。');
+  logs.push('  投稿者はSlackで ' + VIZ_SLASH_COMMAND + ' を打つと、IDが入力済みのフォームを開けます（Slackアプリにこのコマンドの登録が要ります）。');
+  logs.push('  フォームの「' + VIZ_FORM_TITLES.ROOM + '」の選択肢は、「師匠リスト」シートの「表示名」から自動で作られます（手作業(4)で表示名を入れてください）。');
+  logs.push('  フォームの説明文に出るチャンネルのリンクは、「ナイスチャレンジ設定」の「ナイスチャレンジのチャンネルのリンク」「よくある質問のチャンネルのリンク」に入れてください。');
   logs.push('');
   logs.push('セットアップ完了。Slackで /event を打ってフォームリンクが返れば成功です。');
   console.log(logs.join('\n'));
@@ -318,6 +321,8 @@ function addFormItem_(form, spec) {
       item = form.addTimeItem(); break;
     case 'MULTIPLE_CHOICE':
       item = form.addMultipleChoiceItem(); break;
+    case 'LIST':
+      item = form.addListItem(); break;     // プルダウン
     case 'PAGE_BREAK':
       // セクションの区切り。回答を持たないので必須の設定も無い
       return form.addPageBreakItem().setTitle(spec.title);
@@ -325,6 +330,9 @@ function addFormItem_(form, spec) {
       throw new Error('未対応のフォーム設問タイプ: ' + spec.type + '（' + spec.title + '）');
   }
   item.setTitle(spec.title);
+  if (spec.help) {
+    item.setHelpText(spec.help);
+  }
   if (spec.choices) {
     item.setChoiceValues(spec.choices);
   }

@@ -98,6 +98,8 @@ function onManagementSpreadsheetEdit(e) {
   if (name === SHEET_MASTER_LIST) {
     // 師匠リストは編集内容をスクリプトプロパティへ反映する必要がある
     notifyMasterListSync_(e.source, syncMasterList());
+    // フォームの「所属部屋」の選択肢は、師匠リストの表示名から作る
+    syncVizRoomsFromSheet_(e.source);
     return;
   }
   if (name === SHEET_VIZ_SETTINGS) {
@@ -109,6 +111,7 @@ function onManagementSpreadsheetEdit(e) {
     setupEnabledColumn_(e.range.getSheet(), VIZ_FIELD_COL.ENABLED);
     return;
   }
+
   if (name === SHEET_RELAY_MAPPING) {
     // 転送マッピングはリアクションの都度シートを直接読むので反映処理は不要。
     // 入力規則だけ師匠リストと揃える（トーストは出さない。
@@ -151,6 +154,7 @@ function onManagementSpreadsheetChange(e) {
     const name = active ? active.getName() : '';
     if (name === SHEET_MASTER_LIST) {
       notifyMasterListSync_(e.source, syncMasterList());
+      syncVizRoomsFromSheet_(e.source);
     } else if (name === SHEET_VC_ROOMS) {
       notifyVcRoomSync_(e.source, syncVcRoomChoices());
     }
