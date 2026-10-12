@@ -188,7 +188,9 @@ function initializeSheets() {
   // イベントの参加状況とは無関係な運用設定・内部ログなので公開用②へは出さない。
   const management = SpreadsheetApp.openById(config.managementSpreadsheetId);
   const relayMapping = getOrCreateSheet_(management, SHEET_RELAY_MAPPING, RELAY_MAPPING_HEADER);
-  protectSystemSheet_(getOrCreateSheet_(management, SHEET_RELAY_LOG, RELAY_LOG_HEADER));
+  const relayLog = getOrCreateSheet_(management, SHEET_RELAY_LOG, RELAY_LOG_HEADER);
+  ensureHeader_(relayLog, RELAY_LOG_HEADER);   // 列名を変えたときに、稼働中のシートの見出しを追随させる
+  protectSystemSheet_(relayLog);
   getOrCreateSheet_(management, SHEET_MASTER_LIST, MASTER_LIST_HEADER);
   // Discord VCの在庫台帳。空のままでも他の機能には影響しない
   // （開催形式でDiscord VCを選んだときだけ参照される）

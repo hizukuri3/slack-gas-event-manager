@@ -119,7 +119,7 @@ function handleReactionAdded_(config, event) {
  *
  * ロック内では「ログ行の予約」だけを行い、Slackへの投稿はロック外で実行する
  * （InteractionHandler と同じくロック保持時間を最小化する方針）。
- * 予約行は転送先TSが空のまま先に入るため、同時押しやSlackの再送はここで弾かれる。
+ * 予約行は転送先メッセージIDが空のまま先に入るため、同時押しやSlackの再送はここで弾かれる。
  */
 function forwardOnce_(config, srcChannel, srcTs, emoji, destChannel, permalink, srcText) {
   const key = buildForwardKey_(srcChannel, srcTs, emoji, destChannel);
@@ -149,7 +149,7 @@ function forwardOnce_(config, srcChannel, srcTs, emoji, destChannel, permalink, 
     return;
   }
   // 投稿に失敗した予約は無効化して、次に同じ絵文字が押されたら再挑戦できるようにする。
-  // 行自体は残すため、転送先TSが空のまま取り消し日時が入った行＝転送失敗の記録になる
+  // 行自体は残すため、転送先メッセージIDが空のまま取り消し日時が入った行＝転送失敗の記録になる
   markForwardLogRemoved_(config, [key]);
 }
 
@@ -305,7 +305,7 @@ function findActiveForwardLogRow_(config, key) {
 }
 
 /**
- * 転送前に「予約」としてログ行を先に入れる。転送先TSは投稿成功後に埋める。
+ * 転送前に「予約」としてログ行を先に入れる。転送先メッセージIDは投稿成功後に埋める。
  *
  * ts（例: 1784563559.123456）はシートで数値化されると小数部が失われ、
  * chat.delete が失敗する。先頭にアポストロフィを付けて必ず文字列として保存する
