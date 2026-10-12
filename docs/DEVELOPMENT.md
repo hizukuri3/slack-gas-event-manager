@@ -105,15 +105,30 @@ clone したディレクトリで、GASプロジェクトと橋渡しする clas
 - `FormHandler.gs` … フォーム送信の処理本体。設問タイトルで回答を照合するため、`FORM_TITLES` / `formSpec_()` と設問名の一致が要。
 - `InteractionHandler.gs` … Slackボタン押下の処理（予約・キャンセル・定員・繰り上げ）。
 - `Repository.gs` … スプレッドシート読み書き（管理用・公開用のミラーリング）。
-- `Quiz.gs` … 一問一答クイズ。毎時トリガーで「投稿時刻を過ぎていて今日まだ出していなければ出す」と判定する。リアクションは `EmojiReactionRelay.gs` の `handleSlackEvent_` から、絵文字転送とは独立に呼ばれる。
+- `Quiz.gs` … 一問一答クイズ。毎時トリガーで「投稿時刻を過ぎていて今日まだ出していなければ出す」と判定する。出すかどうかの判定は純粋関数 `computeQuizSchedule_` に一本化してあり、実際の出題（`postQuizIfDue_`）と、「クイズ設定」の「次の出題」の表示（`refreshQuizNextLabel_`）で同じ判定を使う（お休み・出題を始める日・土日の扱いもここ）。リアクションは `EmojiReactionRelay.gs` の `handleSlackEvent_` から、絵文字転送とは独立に呼ばれる。
 - `VizReview.gs` … ナイスチャレンジ。フォーム送信は `onFormSubmit` の先頭で `handleVizFormSubmit_` が送信元フォームを見て振り分ける（ナイスチャレンジ用フォームのIDは「ナイスチャレンジ設定」シートが正で、プロパティには持たない。編集トリガーが送信トリガーを追随させる）。スタンプは `handleSlackEvent_` から、返信（`message` イベント）も同じ入口から呼ばれる。投稿者の特定にはフォームのSlackユーザーIDを使う（`/review` が `SlashCommand.gs` の `handleVizSlashCommand_` で事前入力URLを返す。フォームIDと設問のエントリIDは、3秒ルールのためスクリプトプロパティ `VIZ_FORM_ID` / `VIZ_FORM_ENTRY_AUTHOR` に写してあり、`refreshVizPrefill_` が設定の編集時とセットアップ時に更新する）。フォームの回答は「ナイスチャレンジ設定」の日数だけ残し（編集URLをDM→編集は同じ回答IDで `onFormSubmit` が再度走り、`chat.update` で投稿を更新）、`cleanupVizResponses`（毎日）が期限切れを削除する。フォームの説明文は「ナイスチャレンジ設定」のテンプレート（`{ナイスチャレンジ}` `{よくある質問}` を設定のリンクへ置換）から `applyVizFormTexts_` が書き込み、「所属部屋」の選択肢は「師匠リスト」の表示名から `syncVizRoomChoices_` が貼り直す（設定と師匠リストの編集トリガーから）。
 - `MasterList.gs` … 師匠リスト（管理用①のシート）→ スクリプトプロパティへの反映。シートが正で、プロパティは `/event` を3秒ルール内に収めるための読み取り用キャッシュ。
 
 アーキテクチャ全体像とデータ構造は [README](../README.md) にあります。
 
+## テスト
+
+外部サービス（スプレッドシート・フォーム・Slack）を使わない判定ロジックは、Node の自動テストで確かめます。依存パッケージはありません（Node 標準の `node:test`）。
+
+```bash
+npm test
+```
+
+- `test/harness.js` が `src/*.gs` をGASと同じ順（ファイル名の昇順）で1つの空間へ読み込みます。GASのサービス（`SpreadsheetApp` など）は渡さないので、外へ出る関数はテストの中で差し替えます。`const` の定数は `gas.get('名前')` で取れます。
+- `test/static.test.js` は、構文・関数と定数の**重複定義**・未定義の内部関数の呼び出しを点検します。GASは同名の関数を黙って上書きする（後から読まれる方が勝つ）ため、これが無いと気づけません。
+- PR のたびに GitHub Actions（`test.yml`）で実行されます。GASへの配布（clasp は `src/` だけを配る）には影響しません。
+- **実機でしか確かめられないもの**: フォームの入力規則・確認メッセージ、シートの行の挿入位置、Slackの通知の届き方、編集トリガーの反応。これらは dev で確認してください。
+- 関数を足す・変えるときは、対応するテストを足してください。
+
 ## 変更を入れるときの流れ
 
 1. `dev` から機能ブランチを切る。
-2. `clasp push` で検証用プロジェクトに反映して動作を確認する（または verification へマージして確認）。
-3. PR を `dev` に出す → マージで verification へ自動デプロイ。
-4. 検証できたら `dev → prod` のPRで本番へ昇格。
+2. `npm test` を通す。必要ならテストも足す。
+3. `clasp push` で検証用プロジェクトに反映して動作を確認する（または verification へマージして確認）。
+4. PR を `dev` に出す（テストが自動で走る）→ マージで verification へ自動デプロイ。
+5. 検証できたら `dev → prod` のPRで本番へ昇格。
