@@ -195,7 +195,9 @@ function initializeSheets() {
   const vcRooms = getOrCreateSheet_(management, SHEET_VC_ROOMS, VC_ROOM_HEADER);
   // 一問一答クイズ。「クイズ設定」の投稿先チャンネルを入れるまでは動かないので、
   // クイズを使わない期でも作っておくだけで害はない
-  getOrCreateSheet_(management, SHEET_QUIZ_QUESTIONS, QUIZ_HEADER);
+  const quizQuestions = getOrCreateSheet_(management, SHEET_QUIZ_QUESTIONS, QUIZ_HEADER);
+  // 運営が見出しを直していることもあるので、見出し全体は書き換えず、名前を変えた列だけ追随させる
+  quizQuestions.getRange(1, QUIZ_COL.MESSAGE_TS + 1).setValue(QUIZ_HEADER[QUIZ_COL.MESSAGE_TS]);
   const addedQuizItems = ensureQuizSettingRows_(
     getOrCreateSheet_(management, SHEET_QUIZ_SETTINGS, QUIZ_SETTINGS_HEADER));
   if (addedQuizItems.length > 0) {
