@@ -35,6 +35,7 @@ Slack と GAS（Google Apps Script）を軸に、**コミュニティ運営を S
 | [docs/SETUP.md](docs/SETUP.md) | 導入手順・前提条件・環境変数（スクリプトプロパティ）一覧 | 導入・運用する人 |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | 使い方・運用フロー・メンバーへの案内・トラブルシューティング / FAQ | 運用・利用する人 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 開発環境（clasp）・ブランチ運用・dev/prod デプロイ・コード構成 | Fork して継続開発する人 |
+| [docs/GO_LIVE.md](docs/GO_LIVE.md) | 本番開始チェックリスト（dev での確認 → 構築 → 公開 → 止め方） | 本番を立ち上げる人 |
 
 ## できること
 
@@ -179,7 +180,8 @@ flowchart LR
 ├── docs/
 │   ├── SETUP.md            # 導入手順・前提条件・環境変数一覧（運用者向け）
 │   ├── OPERATIONS.md       # 使い方・運用フロー・メンバー案内・FAQ
-│   └── DEVELOPMENT.md      # 開発環境・ブランチ運用・dev/prodデプロイ（開発者向け）
+│   ├── DEVELOPMENT.md      # 開発環境・ブランチ運用・dev/prodデプロイ（開発者向け）
+│   └── GO_LIVE.md          # 本番開始チェックリスト（dev確認 → 構築 → 公開 → 止め方）
 ├── .github/
 │   └── workflows/
 │       ├── deploy.yml      # dev/prodマージ時に該当環境のGASへ自動デプロイ（clasp push + deploy）
