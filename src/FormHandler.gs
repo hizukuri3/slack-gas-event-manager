@@ -387,16 +387,33 @@ function onFormSubmit(e) {
       return;
     }
 
-    if (existing) {
-      handleEventEdit_(config, existing, answers, formResponse);
-    } else {
-      // 3. 二重登録ガード（「編集のつもりで新規送信」対策）
+    // 3. 二重登録ガード（「編集のつもりで新規送信」対策）
+    if (!existing) {
       const duplicate = findDuplicateEvent_(config, answers);
       if (duplicate) {
         notifyDuplicateEvent_(config, answers, duplicate);
         return;
       }
-      handleNewEvent_(config, formResponse, answers, isMaster);
+    }
+
+    try {
+      if (existing) {
+        handleEventEdit_(config, existing, answers, formResponse);
+      } else {
+        handleNewEvent_(config, formResponse, answers, isMaster);
+      }
+    } catch (err) {
+      // 途中で止まっても、主催者には何も届かず、誰も気づけなかった。知らせて、実行は失敗のまま残す
+      // （GASの実行履歴に失敗として残り、原因を追える）
+      console.error('フォーム送信の処理に失敗しました（' + responseId + '）: ' + (err && err.stack ? err.stack : err));
+      try {
+        notifyFormError_(config, formResponse, [
+          '処理の途中でエラーが起きました。少し時間をおいて、同じURLからもう一度送信してください。' +
+          '何度やっても同じ場合は、運営にお問い合わせください。']);
+      } catch (notifyErr) {
+        console.error('主催者への通知にも失敗しました: ' + notifyErr);
+      }
+      throw err;
     }
   } finally {
     lock.releaseLock();
@@ -477,6 +494,11 @@ function validateAnswers_(answers, existing) {
   const startChanged = !existing || existing.start.getTime() !== answers.start.getTime();
   if (startChanged && answers.start.getTime() < Date.now()) {
     errors.push('開始日時が過去になっています。日付・時刻を確認してください。');
+  }
+  // 中止から開催に戻す編集は、すでに終了した日時のままでは戻せない（戻しても、参加ボタンが使えない）
+  const revived = Boolean(existing) && isCancelledStatus_(existing.status) && !isCancelledStatus_(answers.status);
+  if (revived && !startChanged && answers.end.getTime() < Date.now()) {
+    errors.push('終了した日時のイベントは、開催に戻せません。開始日時・終了時刻を、これからの日時に直してください。');
   }
   // 長さの上限も、日時を変えたときだけ見る（長い既存イベントを、日時を変えずに中止できなくなるため）
   const timeChanged = !existing || startChanged || existing.end.getTime() !== answers.end.getTime();
@@ -623,8 +645,14 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
 
   // 2. Slack告知投稿（参加/取り消しボタン付きBlock Kitメッセージ）
   const participantsUrl = buildParticipantsPageUrl_(config, eventId);
-  const msg = buildAnnouncementBlocks_(ev, [], participantsUrl, buildCalendarViewUrl_(config));
-  const ts = postMessage_(config, config.slackChannelId, msg.text, null, msg.blocks);
+  let ts = null;
+  try {
+    const msg = buildAnnouncementBlocks_(ev, [], participantsUrl, buildCalendarViewUrl_(config));
+    ts = postMessage_(config, config.slackChannelId, msg.text, null, msg.blocks);
+  } catch (err) {
+    deleteCalendarEvents_(config, ev);   // 作ったカレンダー予定を残さない
+    throw err;
+  }
   if (!ts) {
     // 告知が出ないイベントは、誰も参加登録できないのに、主催者には「登録しました」と届いてしまう。
     // 作ったカレンダー予定を消し、シートにも書かずに差し戻す。シートに無いので、同じ編集用URLから
@@ -640,11 +668,19 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
   ev.slackTs = ts;
 
   // 3. スプレッドシートへ記録（管理用・公開用の両方）
-  insertEvent_(config, ev);
+  try {
+    insertEvent_(config, ev);
+  } catch (err) {
+    // 記録できなければ、告知もカレンダー予定も、どこからも管理されないものになる。消して、元に戻す
+    deleteCalendarEvents_(config, ev);
+    deleteMessage_(config, config.slackChannelId, ts);
+    throw err;
+  }
 
   // 4. カレンダー説明欄に概要・参加者確認URL・Slackパーマリンクを書き込み
+  //    （補助的な情報。失敗しても、記録・告知は済んでいるので、主催者へのDMまで進める）
   const permalink = getPermalink_(config, config.slackChannelId, ts);
-  patchCalendarDescriptions_(config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
+  tryPatchCalendarDescriptions_(config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
 
   // 5. 主催者へ回答編集用URLをDMで通知
   let dmText =
@@ -685,10 +721,13 @@ function handleEventEdit_(config, existing, answers, formResponse) {
   const timeChanged =
     existing.start.getTime() !== answers.start.getTime() ||
     existing.end.getTime() !== answers.end.getTime();
-  // 日時・開催形式が変わった場合はカレンダー予定の作り直しが必要（分割数が変わり得るため）
+  // 日時・開催形式が変わった場合はカレンダー予定の作り直しが必要（分割数が変わり得るため）。
+  // 中止から開催に戻す場合も、必ず作り直す。中止のときにカレンダー予定を削除しているので、
+  // 日時が同じでも、既存の予定を「更新」することはできない
   const scheduleChanged =
     timeChanged ||
-    existing.format !== answers.format;
+    existing.format !== answers.format ||
+    revived;
   ev.title = answers.title;
   ev.organizer = answers.organizer;
   ev.start = answers.start;
@@ -744,8 +783,12 @@ function handleEventEdit_(config, existing, answers, formResponse) {
 
   // カレンダー更新（日時・形式変更時は作り直し。ev の calendarEventId / location が更新される）
   updateCalendarEvents_(config, ev, scheduleChanged);
-  patchCalendarDescriptions_(config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
+  // 予定のIDを、すぐにシートへ記録する。作り直した予定のIDを記録する前に止まると、
+  // カレンダーに、どこからも管理されない予定が残る（説明欄の更新で止まった不具合の原因）
   updateEvent_(config, ev);
+  // 説明欄は補助的な情報なので、失敗しても、告知の再描画・通知まで進める
+  const descriptionUpdated = tryPatchCalendarDescriptions_(
+    config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
   // 定員増加時：空いた枠の分だけキャンセル待ちを先着順で自動繰り上げ（本人へDM通知）
   promoteWaitlistedUpToCapacity_(config, ev);
   refreshAnnouncement_(config, ev);
@@ -753,12 +796,21 @@ function handleEventEdit_(config, existing, answers, formResponse) {
   // ボタン処理側の「現在人数 >= 定員」判定で自動的にキャンセル待ちへ回る。
 
   // 開催時間が変わった場合は、告知スレッドと参加者DMで能動的に周知する
-  // （Slackはメッセージ編集ではプッシュ通知を出さず、告知の再描画だけでは参加者が気づけないため）
-  if (timeChanged || roomChanged) {
+  // （Slackはメッセージ編集ではプッシュ通知を出さず、告知の再描画だけでは参加者が気づけないため）。
+  // 中止から開催に戻した場合は、変更前の日時（中止になったもの）を伝える意味が無いので、
+  // いまの日時・会場を伝える再開の通知にまとめる
+  if (revived) {
+    notifyRevived_(config, ev);
+  } else if (timeChanged || roomChanged) {
     notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom);
   }
 
-  let dmText = ':pencil2: イベント「' + ev.title + '」の内容を更新しました。';
+  let dmText = revived
+    ? ':arrows_counterclockwise: イベント「' + ev.title + '」を、中止から開催に戻しました。カレンダー予定は作り直しています。'
+    : ':pencil2: イベント「' + ev.title + '」の内容を更新しました。';
+  if (!descriptionUpdated) {
+    dmText += '\n:warning: カレンダー予定の説明欄だけ更新できませんでした（予定と告知は更新済みです）。';
+  }
   if (scheduleChanged && isAutoMeet_(ev.format)) {
     dmText += '\n:bulb: 日時・開催形式の変更に伴い、Meet URLが再発行されています。最新のURLはSlack告知メッセージをご確認ください。';
   }
@@ -831,6 +883,26 @@ function notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom) {
 }
 
 /**
+ * 中止から開催に戻したことを、告知スレッドへの投稿で、参加登録中・キャンセル待ちの全員（運営を含む）へ
+ * メンションして知らせる。中止のときと同じ理由（ボタンを押しただけの人はスレッドを購読していない）で、
+ * メンションしないと通知が届かない。参加登録は、中止の間も残っている。
+ */
+function notifyRevived_(config, ev) {
+  if (!ev.slackTs) return;
+  const lines = [
+    ':arrows_counterclockwise: イベント「' + ev.title + '」は、中止から開催に戻りました。',
+    '日時: ' + formatDateRange_(ev.start, ev.end)
+  ];
+  if (ev.vcRoom) lines.push('会場VC: ' + ev.vcRoom);
+  lines.push('参加登録は、そのまま残っています。');
+  postMessage_(
+    config, ev.slackChannel,
+    lines.join('\n') + buildParticipantMentions_(listParticipants_(config, ev.eventId)),
+    ev.slackTs
+  );
+}
+
+/**
  * イベント中止処理：カレンダー削除（分割予定を含む全件）・シート更新・Slack告知へ【中止】追記。
  * 告知スレッドの投稿では、参加登録中・キャンセル待ちの人をメンションする。
  * ボタンを押しただけの人はスレッドを購読していないので、メンションしないと通知が届かない。
@@ -855,7 +927,7 @@ function cancelEvent_(config, ev, wasCancelled) {
     refreshAnnouncement_(config, ev);
     postMessage_(
       config, ev.slackChannel,
-      ':no_entry: イベント「' + ev.title + '」は中止になりました。' + buildCancelMentions_(participants),
+      ':no_entry: イベント「' + ev.title + '」は中止になりました。' + buildParticipantMentions_(participants),
       ev.slackTs
     );
   }
@@ -867,11 +939,11 @@ function cancelEvent_(config, ev, wasCancelled) {
 }
 
 /**
- * 中止の投稿に付ける、参加者へのメンション（改行から始まる文字列。誰もいなければ空文字）。
+ * 中止・再開の投稿に付ける、参加者へのメンション（改行から始まる文字列。誰もいなければ空文字）。
  * 運営として参加した人は「参加登録」に含める。
  * @param {Array} participants listParticipants_ の結果
  */
-function buildCancelMentions_(participants) {
+function buildParticipantMentions_(participants) {
   const mention = function (p) { return '<@' + p.userId + '>'; };
   const joined = participants.filter(function (p) { return p.status !== PSTATUS.WAITLIST; });
   const waiting = participants.filter(function (p) { return p.status === PSTATUS.WAITLIST; });
