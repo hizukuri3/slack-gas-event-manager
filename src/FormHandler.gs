@@ -834,7 +834,8 @@ function placeLabel_(format, location) {
 }
 
 /**
- * 開催時間・会場VC・開催形式・場所の変更を、告知スレッドへの投稿と参加者・キャンセル待ちへのDMで周知する。
+ * 開催時間・会場VC・開催形式・場所の変更を、告知スレッドへの投稿で、参加登録中・キャンセル待ちの
+ * 全員（運営を含む）へメンションして周知する（個別のDMは送らない）。
  *
  * 会場VCの変更も同じ強度で伝えるのは、時間の変更とまったく同じ理由による。
  * Slackはメッセージの編集では通知も未読も出さないため、告知を再描画しただけでは
@@ -888,32 +889,22 @@ function notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom, prevFor
   }
   const headline = items.join('・') + 'が変更されました';
 
-  // 1. 告知スレッドへお知らせを投稿（フォロワー全体にプッシュ通知が飛ぶ）
-  if (ev.slackTs) {
-    postMessage_(
-      config, ev.slackChannel,
-      ':alarm_clock: イベント「' + ev.title + '」の' + headline + '。\n' +
-      detail + '\n' +
-      '参加登録済みの方へは個別にDMでもお知らせしています。',
-      ev.slackTs
-    );
+  // 告知スレッドへ、参加登録中・キャンセル待ちの全員（運営を含む）へのメンション付きで知らせる。
+  // 中止・再開と同じ方式に統一している。ボタンを押しただけの人はスレッドを購読していないので、
+  // メンションしないと通知が届かない。DMを1人ずつ送ると、人数が多いときに送信の回数制限で、
+  // 一部の人に届かないことがあるが、スレッドへの投稿は1回で済む
+  if (!ev.slackTs) {
+    console.warn('告知メッセージが無いため、変更を参加者へ通知できません: ' + ev.eventId);
+    return;
   }
-
-  // 2. 参加者・キャンセル待ちの各人へDM（時間変更は双方に影響するため両方へ送る）
-  // DMは告知チャンネルと別の場所に届くため、告知メッセージへのリンクを添えて
-  // どのイベントかをすぐ辿れるようにする（同名の連続講座がある場合の取り違え防止）。
-  const permalink = ev.slackTs ? getPermalink_(config, ev.slackChannel, ev.slackTs) : '';
-  const linkLine = permalink ? '\n▶ 告知を見る: ' + permalink : '';
-  listParticipants_(config, ev.eventId).forEach(function (p) {
-    const suffix = p.status === PSTATUS.WAITLIST ? '（現在キャンセル待ちで登録中です）' : '';
-    sendDirectMessage_(
-      config, p.userId,
-      ':alarm_clock: 参加登録中のイベント「' + ev.title + '」の' + headline + '。' + suffix + '\n' +
-      detail + '\n' +
-      'ご都合が合わなくなった場合は、告知メッセージの「取り消す」ボタンからキャンセルできます。' +
-      linkLine
-    );
-  });
+  postMessage_(
+    config, ev.slackChannel,
+    ':alarm_clock: イベント「' + ev.title + '」の' + headline + '。\n' +
+    detail + '\n' +
+    'ご都合が合わなくなった場合は、告知メッセージの「取り消す」ボタンからキャンセルできます。' +
+    buildParticipantMentions_(listParticipants_(config, ev.eventId)),
+    ev.slackTs
+  );
 }
 
 /**

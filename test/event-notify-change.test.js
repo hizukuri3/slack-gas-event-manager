@@ -14,7 +14,8 @@ function setup() {
     postMessage_: (c, channel, text, threadTs) => posts.push({ text, threadTs }),
     sendDirectMessage_: (c, user, text) => dms.push({ user, text }),
     getPermalink_: () => 'https://slack/permalink',
-    listParticipants_: () => [{ userId: 'UJOIN1', status: '参加' }, { userId: 'UWAIT1', status: 'キャンセル待ち' }]
+    listParticipants_: () => [{ userId: 'UJOIN1', status: '参加' }, { userId: 'USTAFF1', status: '運営' },
+      { userId: 'UWAIT1', status: 'キャンセル待ち' }]
   });
   const start = new Date(2099, 0, 5, 10);
   const end = new Date(2099, 0, 5, 11);
@@ -38,7 +39,7 @@ test('何も変わっていなければ、通知しない', () => {
   assert.equal(dms.length, 0);
 });
 
-test('開催形式が変わる（対面 → Google Meet）: スレッドと全員へDM。形式・場所・Meetの案内が載る', () => {
+test('開催形式が変わる（対面 → Google Meet）: スレッドで全員をメンション。形式・場所・Meetの案内が載る。DMは送らない', () => {
   const { F, posts, dms, run } = setup();
   run({ format: F.MEET, location: 'https://meet.google.com/aaa,https://meet.google.com/bbb' }, { format: F.OFFLINE });
   assert.equal(posts.length, 1);
@@ -51,8 +52,10 @@ test('開催形式が変わる（対面 → Google Meet）: スレッドと全�
   assert.match(t, /場所（変更後）: Google Meet/);
   assert.ok(!t.includes('meet.google.com'), '長いURLは載せない');
   assert.match(t, /Meet の URL は新しく発行/);
-  assert.deepEqual(plain(dms.map((d) => d.user)), ['UJOIN1', 'UWAIT1']);
-  assert.match(dms[1].text, /現在キャンセル待ちで登録中/);
+  // 参加登録中・キャンセル待ちの全員（運営を含む）をスレッドでメンションする。個別のDMは送らない
+  assert.match(t, /参加登録: <@UJOIN1> <@USTAFF1>/);
+  assert.match(t, /キャンセル待ち: <@UWAIT1>/);
+  assert.equal(dms.length, 0);
 });
 
 test('場所のURL・住所だけが変わる（対面）: 開催形式の行は出ず、場所の変更として通知する', () => {
@@ -112,7 +115,7 @@ test('日時と開催形式を同時に変える: 通知は1回にまとめる',
     { format: F.OFFLINE });
   assert.equal(posts.length, 1);
   assert.match(posts[0].text, /開催日時・開催形式・会場が変更されました/);
-  assert.equal(dms.length, 2);
+  assert.equal(dms.length, 0);
 });
 
 test('編集の処理: 開催形式だけを変えたときも、通知が呼ばれる', () => {
@@ -134,4 +137,13 @@ test('編集の処理: 開催形式だけを変えたときも、通知が呼ば
     format: F.OTHER_ONLINE, location: 'https://example.com', description: '', preparation: '', vcRoom: '' };
   gas.ctx.handleEventEdit_({ calendarId: 'c' }, existing, answers, {});
   assert.deepEqual(plain(calls), [{ prevFormat: F.OFFLINE, prevLocation: '会議室A', format: F.OTHER_ONLINE }]);
+});
+
+test('告知メッセージが無いときは、投稿せず、DMも送らない', () => {
+  const { gas, F, posts, dms, start, end } = setup();
+  gas.ctx.notifyScheduleChange_({}, { eventId: 'E1', title: 't', start, end, format: F.OFFLINE,
+    location: '会議室B', vcRoom: '', slackTs: '', slackChannel: 'C1' },
+    start, end, '', F.OFFLINE, '会議室A');
+  assert.equal(posts.length, 0);
+  assert.equal(dms.length, 0);
 });
