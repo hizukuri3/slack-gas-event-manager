@@ -196,7 +196,11 @@ function initializeSheets() {
   // 一問一答クイズ。「クイズ設定」の投稿先チャンネルを入れるまでは動かないので、
   // クイズを使わない期でも作っておくだけで害はない
   getOrCreateSheet_(management, SHEET_QUIZ_QUESTIONS, QUIZ_HEADER);
-  ensureQuizSettingRows_(getOrCreateSheet_(management, SHEET_QUIZ_SETTINGS, QUIZ_SETTINGS_HEADER));
+  const addedQuizItems = ensureQuizSettingRows_(
+    getOrCreateSheet_(management, SHEET_QUIZ_SETTINGS, QUIZ_SETTINGS_HEADER));
+  if (addedQuizItems.length > 0) {
+    console.log('「クイズ設定」に項目を追加しました: ' + addedQuizItems.join('、'));
+  }
   const quizLog = getOrCreateSheet_(management, SHEET_QUIZ_LOG, QUIZ_LOG_HEADER);
   ensureHeader_(quizLog, QUIZ_LOG_HEADER);
   protectSystemSheet_(quizLog);
