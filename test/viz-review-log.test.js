@@ -57,7 +57,7 @@ test('返信: 本文が「返信内容」に入り、投稿者・投稿内容を
   assert.equal(row[COL.REPLY_TEXT], 'A & B <ok>', 'Slackのエスケープを元に戻す');
   const f = sheet.formulas['2,' + (COL.POST_AUTHOR + 1)];
   assert.match(f, /ナイスチャレンジ投稿ログ/);
-  assert.match(f, /\$E2/, '投稿メッセージTS（E列）で引く');
+  assert.match(f, /\$E2/, '投稿ID（E列）で引く');
   assert.match(f, /\$B\$2:\$B/, '投稿ログの投稿者（B列）');
   assert.match(sheet.formulas['2,' + (COL.POST_TEXT + 1)], /\$F\$2:\$F/, '投稿ログの投稿内容（F列）');
 });
