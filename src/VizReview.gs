@@ -317,6 +317,7 @@ function handleVizReaction_(config, event) {
       if (isRetry || rows.some(function (r) { return !r.removed; })) return;
       // 並びは VIZ_REVIEW_HEADER と一致させること
       sheet.appendRow([eventAt, VIZ_KIND_STAMP, event.user, emoji, "'" + postTs, '', '']);
+      setVizReviewPostFormulas_(sheet, sheet.getLastRow());
     } else if (event.type === 'reaction_removed') {
       rows.forEach(function (r) {
         if (r.removed) return;
@@ -331,8 +332,9 @@ function handleVizReaction_(config, event) {
 }
 
 /**
- * Viz投稿のスレッドへの返信（message イベント）を記録する。本文は保存しない。
- * 返信が削除されたとき（message_deleted）は、削除日時を埋める。
+ * Viz投稿のスレッドへの返信（message イベント）を記録する。本文は「返信内容」に保存する。
+ * 返信が削除されたとき（message_deleted）は、削除日時を埋めて本文を消す。
+ * 返信が編集されたとき（message_changed）は、本文を更新する。
  */
 function handleVizReply_(config, event) {
   // 返信の削除は、元の返信が previous_message に入って届く
@@ -343,7 +345,11 @@ function handleVizReply_(config, event) {
       new Date(Number(event.event_ts) * 1000));
     return;
   }
-  // 編集（message_changed）やBotの投稿は対象外。通常の返信と「チャンネルにも投稿」だけ拾う
+  if (event.subtype === 'message_changed') {
+    handleVizReplyEdited_(config, event);
+    return;
+  }
+  // Botの投稿などは対象外。通常の返信と「チャンネルにも投稿」だけ拾う
   if (event.subtype && event.subtype !== 'thread_broadcast') return;
   if (event.bot_id || !event.user) return;
   // スレッドの親メッセージ自身（thread_ts === ts）は返信ではない
@@ -374,8 +380,9 @@ function handleVizReply_(config, event) {
     if (dup.length > 0) return;
     sheet.appendRow([
       new Date(Number(replyTs.split('.')[0]) * 1000), VIZ_KIND_REPLY, event.user, '',
-      "'" + postTs, '', "'" + replyTs
+      "'" + postTs, '', "'" + replyTs, '', '', toVizReplyCell_(event.text)
     ]);
+    setVizReviewPostFormulas_(sheet, sheet.getLastRow());
   } finally {
     lock.releaseLock();
   }
@@ -397,12 +404,96 @@ function handleVizReplyDeleted_(config, channel, postTs, replyTs, deletedAt) {
     findVizReviewRows_(sheet, function (row) {
       return row[VIZ_REVIEW_COL.KIND] === VIZ_KIND_REPLY && String(row[VIZ_REVIEW_COL.REPLY_TS]) === replyTs;
     }).forEach(function (r) {
+      // 消された返信の本文は残さない（行は、返信数の集計のために残す）
+      sheet.getRange(r.rowNumber, VIZ_REVIEW_COL.REPLY_TEXT + 1).clearContent();
       if (r.removed) return;
       sheet.getRange(r.rowNumber, VIZ_REVIEW_COL.REMOVED_AT + 1).setValue(deletedAt);
     });
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * 返信が編集されたとき、記録済みの返信の本文を更新する。記録の無い返信（本人の返信・
+ * ナイスチャレンジ以外のチャンネル・記録前の返信）は何もしない。
+ * リンクの展開などでSlackが自動で編集扱いにしたときも届くが、本文は同じなので結果は変わらない。
+ */
+function handleVizReplyEdited_(config, event) {
+  const message = event.message || {};
+  if (!message.ts || !message.thread_ts || message.thread_ts === message.ts) return;
+  if (message.bot_id || !message.user) return;
+  const vizChannel = getVizChannelId_(config);
+  if (!vizChannel || vizChannel !== event.channel) return;
+
+  const spreadsheet = SpreadsheetApp.openById(config.managementSpreadsheetId);
+  const sheet = spreadsheet.getSheetByName(SHEET_VIZ_REVIEW_LOG);
+  if (!sheet) return;
+  const replyTs = String(message.ts);
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (err) {
+    console.warn('ナイスチャレンジレビューログのロック取得に失敗しました: 返信の編集 ' + replyTs);
+    return;
+  }
+  try {
+    findVizReviewRows_(sheet, function (row) {
+      return row[VIZ_REVIEW_COL.KIND] === VIZ_KIND_REPLY && String(row[VIZ_REVIEW_COL.REPLY_TS]) === replyTs;
+    }).forEach(function (r) {
+      if (r.removed) return;   // 消された返信の本文は書き戻さない
+      sheet.getRange(r.rowNumber, VIZ_REVIEW_COL.REPLY_TEXT + 1).setValue(toVizReplyCell_(message.text));
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * 返信の本文を、セルに書ける形にする。
+ * Slackが &, <, > を &amp; &lt; &gt; にしているので元に戻す。他人の書いた文字列なので、
+ * = + - @ で始まるものは数式として実行されないよう、アポストロフィで文字列にする
+ * （=IMPORTDATA(…) などで、シートの内容を外へ送らせないため）。
+ */
+function toVizReplyCell_(text) {
+  const plain = String(text || '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const limited = truncateForLog_(plain);
+  return /^[=+\-@]/.test(limited) ? "'" + limited : limited;
+}
+
+/** 列の位置（0始まり）をスプレッドシートの列の文字（A, B, …）にする。26列までを想定 */
+function sheetColumnLetter_(index) {
+  return String.fromCharCode(65 + index);
+}
+
+/** レビューログの1行ぶんの、「投稿者」「投稿内容」を投稿ログから引く数式 */
+function vizReviewPostFormulas_(row) {
+  const log = "'" + SHEET_VIZ_LOG + "'!";
+  const column = function (index) {
+    const letter = sheetColumnLetter_(index);
+    return log + '$' + letter + '$2:$' + letter;
+  };
+  const find = 'MATCH($' + sheetColumnLetter_(VIZ_REVIEW_COL.POST_TS) + row + ',' +
+    column(VIZ_LOG_COL.MESSAGE_TS) + ',0)';
+  return [
+    '=IFERROR(INDEX(' + column(VIZ_LOG_COL.AUTHOR) + ',' + find + '),"")',
+    '=IFERROR(INDEX(' + column(VIZ_LOG_COL.TEXT) + ',' + find + '),"")'
+  ];
+}
+
+/** 追加した行に、「投稿者」「投稿内容」の数式を入れる */
+function setVizReviewPostFormulas_(sheet, row) {
+  sheet.getRange(row, VIZ_REVIEW_COL.POST_AUTHOR + 1, 1, 2).setFormulas([vizReviewPostFormulas_(row)]);
+}
+
+/** すでにある行にも、「投稿者」「投稿内容」の数式を入れる（何度実行しても同じ） */
+function backfillVizReviewPostFormulas_(sheet) {
+  const last = sheet.getLastRow();
+  if (last < 2) return;
+  const formulas = [];
+  for (let row = 2; row <= last; row++) formulas.push(vizReviewPostFormulas_(row));
+  sheet.getRange(2, VIZ_REVIEW_COL.POST_AUTHOR + 1, last - 1, 2).setFormulas(formulas);
 }
 
 /**
@@ -588,6 +679,7 @@ function setupVizReview_(config) {
   protectSystemSheet_(log);
   const review = getOrCreateSheet_(spreadsheet, SHEET_VIZ_REVIEW_LOG, VIZ_REVIEW_HEADER);
   ensureHeader_(review, VIZ_REVIEW_HEADER);
+  backfillVizReviewPostFormulas_(review);   // 追加した列に、これまでの行ぶんも数式を入れる
   protectSystemSheet_(review);
 
   const settings = readVizSettings_(spreadsheet);
