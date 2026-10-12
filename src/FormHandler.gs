@@ -796,8 +796,12 @@ function handleEventEdit_(config, existing, answers, formResponse) {
   // ボタン処理側の「現在人数 >= 定員」判定で自動的にキャンセル待ちへ回る。
 
   // 開催時間が変わった場合は、告知スレッドと参加者DMで能動的に周知する
-  // （Slackはメッセージ編集ではプッシュ通知を出さず、告知の再描画だけでは参加者が気づけないため）
-  if (timeChanged || roomChanged) {
+  // （Slackはメッセージ編集ではプッシュ通知を出さず、告知の再描画だけでは参加者が気づけないため）。
+  // 中止から開催に戻した場合は、変更前の日時（中止になったもの）を伝える意味が無いので、
+  // いまの日時・会場を伝える再開の通知にまとめる
+  if (revived) {
+    notifyRevived_(config, ev);
+  } else if (timeChanged || roomChanged) {
     notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom);
   }
 
@@ -879,6 +883,26 @@ function notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom) {
 }
 
 /**
+ * 中止から開催に戻したことを、告知スレッドへの投稿で、参加登録中・キャンセル待ちの全員（運営を含む）へ
+ * メンションして知らせる。中止のときと同じ理由（ボタンを押しただけの人はスレッドを購読していない）で、
+ * メンションしないと通知が届かない。参加登録は、中止の間も残っている。
+ */
+function notifyRevived_(config, ev) {
+  if (!ev.slackTs) return;
+  const lines = [
+    ':arrows_counterclockwise: イベント「' + ev.title + '」は、中止から開催に戻りました。',
+    '日時: ' + formatDateRange_(ev.start, ev.end)
+  ];
+  if (ev.vcRoom) lines.push('会場VC: ' + ev.vcRoom);
+  lines.push('参加登録は、そのまま残っています。');
+  postMessage_(
+    config, ev.slackChannel,
+    lines.join('\n') + buildParticipantMentions_(listParticipants_(config, ev.eventId)),
+    ev.slackTs
+  );
+}
+
+/**
  * イベント中止処理：カレンダー削除（分割予定を含む全件）・シート更新・Slack告知へ【中止】追記。
  * 告知スレッドの投稿では、参加登録中・キャンセル待ちの人をメンションする。
  * ボタンを押しただけの人はスレッドを購読していないので、メンションしないと通知が届かない。
@@ -903,7 +927,7 @@ function cancelEvent_(config, ev, wasCancelled) {
     refreshAnnouncement_(config, ev);
     postMessage_(
       config, ev.slackChannel,
-      ':no_entry: イベント「' + ev.title + '」は中止になりました。' + buildCancelMentions_(participants),
+      ':no_entry: イベント「' + ev.title + '」は中止になりました。' + buildParticipantMentions_(participants),
       ev.slackTs
     );
   }
@@ -915,11 +939,11 @@ function cancelEvent_(config, ev, wasCancelled) {
 }
 
 /**
- * 中止の投稿に付ける、参加者へのメンション（改行から始まる文字列。誰もいなければ空文字）。
+ * 中止・再開の投稿に付ける、参加者へのメンション（改行から始まる文字列。誰もいなければ空文字）。
  * 運営として参加した人は「参加登録」に含める。
  * @param {Array} participants listParticipants_ の結果
  */
-function buildCancelMentions_(participants) {
+function buildParticipantMentions_(participants) {
   const mention = function (p) { return '<@' + p.userId + '>'; };
   const joined = participants.filter(function (p) { return p.status !== PSTATUS.WAITLIST; });
   const waiting = participants.filter(function (p) { return p.status === PSTATUS.WAITLIST; });

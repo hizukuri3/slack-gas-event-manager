@@ -15,7 +15,11 @@ function reviveHarness(options) {
   const events = [];   // 呼び出しの順番
   const dms = [];
   const errors = [];
+  const posts = [];   // 告知スレッドへの投稿
   gas.stub({
+    listParticipants_: () => [
+      { userId: 'UJOIN1', status: '参加' }, { userId: 'USTAFF1', status: '運営' }, { userId: 'UWAIT1', status: 'キャンセル待ち' }],
+    postMessage_: (c, channel, text, threadTs) => { events.push('threadPost'); posts.push({ text, threadTs }); },
     buildParticipantsPageUrl_: () => 'participants',
     getPermalink_: () => 'permalink',
     buildCalendarViewUrl_: () => 'calendarView',
@@ -32,7 +36,7 @@ function reviveHarness(options) {
     sendDirectMessage_: (c, user, text) => { events.push('dm'); dms.push(text); },
     notifyFormError_: (c, r, errs) => { events.push('formError'); errors.push(errs); }
   });
-  return { gas, cal, F, events, dms, errors };
+  return { gas, cal, F, events, dms, errors, posts };
 }
 
 function revivedCase(h, format, extra) {
@@ -74,6 +78,14 @@ function revivedCase(h, format, extra) {
     assert.ok(e.indexOf('updateEvent') < e.indexOf('refresh') && e.indexOf('refresh') < e.indexOf('dm'));
     assert.equal(existing.status, '開催');
     assert.match(h.dms[0], /中止から開催に戻しました/);
+
+    // 告知スレッドへ、参加登録中・キャンセル待ちの全員（運営を含む）をメンションして知らせる
+    assert.equal(h.posts.length, 1);
+    assert.equal(h.posts[0].threadTs, '1.1', '告知のスレッドへ');
+    assert.match(h.posts[0].text, /中止から開催に戻りました/);
+    assert.match(h.posts[0].text, /参加登録: <@UJOIN1> <@USTAFF1>/);
+    assert.match(h.posts[0].text, /キャンセル待ち: <@UWAIT1>/);
+    assert.ok(!h.events.includes('notifySchedule'), '変更前後の日時の通知は、再開の通知にまとめる');
     if (key === 'MEET') {
       assert.match(existing.location, /^https:\/\/meet\.google\.com\//, 'Meet のURLが入る');
       assert.match(h.dms[0], /Meet URLが再発行/);
@@ -114,6 +126,27 @@ test('中止から開催に戻す: 回数制限に当たっても、再試行し
   assert.equal(patchCalls, 2, '1回失敗して、2回目で通る');
   assert.ok(h.events.includes('dm'));
   assert.deepEqual(plain(h.cal.sleeps), [1000]);
+});
+
+test('中止から開催に戻す（日時も変える）: 再開の通知は1回だけ。変更前後の日時の通知とは重ねない', () => {
+  const h = reviveHarness();
+  const { existing, answers } = revivedCase(h, h.F.OFFLINE, {
+    answers: { start: new Date(2099, 0, 6, 10), end: new Date(2099, 0, 6, 11) } });
+  h.gas.ctx.handleEventEdit_({ calendarId: 'c', slackChannelId: 'C1' }, existing, answers, {});
+  assert.equal(h.posts.length, 1);
+  assert.match(h.posts[0].text, /日時: /, 'いまの日時を伝える（変更前後ではなく）');
+  assert.ok(!/変更前/.test(h.posts[0].text));
+  assert.ok(!h.events.includes('notifySchedule'));
+});
+
+test('通常の編集で日時を変えたときは、従来どおり変更前後の通知をする（再開の通知は出さない）', () => {
+  const h = reviveHarness();
+  const { existing, answers } = revivedCase(h, h.F.OFFLINE, {
+    existing: { status: '開催' },
+    answers: { start: new Date(2099, 0, 6, 10), end: new Date(2099, 0, 6, 11) } });
+  h.gas.ctx.handleEventEdit_({ calendarId: 'c', slackChannelId: 'C1' }, existing, answers, {});
+  assert.ok(h.events.includes('notifySchedule'));
+  assert.equal(h.posts.length, 0);
 });
 
 test('通常の編集（中止からの復活ではない・日時も形式も同じ）: 予定は作り直さず、更新だけする', () => {
