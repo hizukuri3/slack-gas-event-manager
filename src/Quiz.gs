@@ -393,13 +393,16 @@ function readQuizSettings_(spreadsheet) {
  * 「クイズ設定」シートに、まだ無い項目の行を既定値つきで足す（initializeSheets から呼ぶ）。
  * 既存の行は値も説明も触らない。運営が入れた値を上書きしないため。
  * コードに項目を足したとき、稼働中のシートへ追随させる経路もここ。
+ * @return {string[]} 足した項目名（実行ログに出すため）
  */
 function ensureQuizSettingRows_(sheet) {
   const labels = sheet.getDataRange().getValues().map(function (row) {
     return String(row[0] || '').trim();
   });
+  const added = [];
   QUIZ_SETTING_ITEMS.forEach(function (item) {
     if (labels.indexOf(item.label) !== -1) return;
+    added.push(item.label);
     // after が指定された項目は、その項目の下に入れる（稼働中のシートでも、関連する設定が並ぶように）
     const afterIndex = item.after ? labels.indexOf(item.after) : -1;
     if (afterIndex !== -1) {
@@ -434,6 +437,7 @@ function ensureQuizSettingRows_(sheet) {
       .setNumberFormat('yyyy/MM/dd')
       .setDataValidation(SpreadsheetApp.newDataValidation().requireDate().setAllowInvalid(false).build());
   }
+  return added;
 }
 
 // ==================== リアクションの記録 ====================
