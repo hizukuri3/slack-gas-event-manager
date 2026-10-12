@@ -712,6 +712,9 @@ function handleEventEdit_(config, existing, answers, formResponse) {
   const prevEnd = existing.end;
   // 変更前のVC部屋。取り直しで変わったら参加者へ周知する必要がある
   const prevRoom = existing.vcRoom;
+  // 変更前の開催形式・場所。変わったら、日時の変更と同じく参加者へ周知する
+  const prevFormat = existing.format;
+  const prevLocation = existing.location;
   // すでに中止になっていたか。中止済みの再送信で、中止の通知を繰り返さないために使う
   const wasCancelled = isCancelledStatus_(existing.status);
   // 中止から「開催」へ戻す編集か。中止の間その部屋は空き扱いになっており、
@@ -801,8 +804,9 @@ function handleEventEdit_(config, existing, answers, formResponse) {
   // いまの日時・会場を伝える再開の通知にまとめる
   if (revived) {
     notifyRevived_(config, ev);
-  } else if (timeChanged || roomChanged) {
-    notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom);
+  } else {
+    // 日時・会場VC・開催形式・場所のどれも変わっていなければ、何もしない（関数の中で判定する）
+    notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom, prevFormat, prevLocation);
   }
 
   let dmText = revived
@@ -821,8 +825,16 @@ function handleEventEdit_(config, existing, answers, formResponse) {
   sendDirectMessage_(config, ev.organizer, dmText);
 }
 
+/** 通知に載せる「場所」の表示。Meet はURLが長く複数あるので「Google Meet」とする */
+function placeLabel_(format, location) {
+  if (isAutoMeet_(format)) return 'Google Meet';
+  const text = String(location || '').trim();
+  if (!text) return '（未定）';
+  return text.length > 200 ? text.slice(0, 200) + '…' : text;
+}
+
 /**
- * 開催時間・会場VCの変更を、告知スレッドへの投稿と参加者・キャンセル待ちへのDMで周知する。
+ * 開催時間・会場VC・開催形式・場所の変更を、告知スレッドへの投稿と参加者・キャンセル待ちへのDMで周知する。
  *
  * 会場VCの変更も同じ強度で伝えるのは、時間の変更とまったく同じ理由による。
  * Slackはメッセージの編集では通知も未読も出さないため、告知を再描画しただけでは
@@ -834,11 +846,16 @@ function handleEventEdit_(config, existing, answers, formResponse) {
  * @param {Date} prevEnd 変更前の終了日時
  * @param {string} prevRoom 変更前のVC部屋名（無ければ空文字）
  */
-function notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom) {
+function notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom, prevFormat, prevLocation) {
   const timeChanged = prevStart.getTime() !== ev.start.getTime() ||
     prevEnd.getTime() !== ev.end.getTime();
   const roomChanged = String(prevRoom || '') !== String(ev.vcRoom || '');
-  if (!timeChanged && !roomChanged) return;
+  const formatChanged = prevFormat !== undefined && String(prevFormat || '') !== String(ev.format || '');
+  // 場所の入力（URL・住所）そのものが変わったか。Meet とDiscord VC は、システムが場所を持つので対象外
+  // （Meet は再発行されるたびに変わるが、それは日時・開催形式の変更として伝える。VCは会場VCの変更として伝える）
+  const placeChanged = prevLocation !== undefined && !isAutoMeet_(ev.format) && !isDiscordVc_(ev.format) &&
+    String(prevLocation || '') !== String(ev.location || '');
+  if (!timeChanged && !roomChanged && !formatChanged && !placeChanged) return;
 
   const lines = [];
   if (timeChanged) {
@@ -849,10 +866,27 @@ function notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom) {
     lines.push('• 会場VC（変更前）: ' + (prevRoom || '（なし）'));
     lines.push('• 会場VC（変更後）: ' + (ev.vcRoom || '（なし）'));
   }
+  if (formatChanged) {
+    lines.push('• 開催形式（変更前）: ' + (prevFormat || '（なし）'));
+    lines.push('• 開催形式（変更後）: ' + (ev.format || '（なし）'));
+  }
+  // 場所は、Discord VC が関わるときは会場VCの行で伝わるので、並べない
+  if ((formatChanged || placeChanged) && !isDiscordVc_(prevFormat) && !isDiscordVc_(ev.format)) {
+    lines.push('• 場所（変更前）: ' + placeLabel_(prevFormat, prevLocation));
+    lines.push('• 場所（変更後）: ' + placeLabel_(ev.format, ev.location));
+  }
+  // Meet は、日時・開催形式が変わるたびに URL が再発行される。URLそのものは長く複数あるので、告知を案内する
+  if (isAutoMeet_(ev.format) && (timeChanged || formatChanged)) {
+    lines.push('• Meet の URL は新しく発行されています。最新の URL は、告知メッセージをご確認ください。');
+  }
   const detail = lines.join('\n');
-  const headline = timeChanged && roomChanged ? '開催日時と会場が変更されました'
-    : timeChanged ? '開催日時が変更されました'
-    : '会場が変更されました';
+  const items = [];
+  if (timeChanged) items.push('開催日時');
+  if (formatChanged) items.push('開催形式');
+  if (roomChanged || placeChanged || (formatChanged && !isDiscordVc_(prevFormat) && !isDiscordVc_(ev.format))) {
+    items.push('会場');
+  }
+  const headline = items.join('・') + 'が変更されました';
 
   // 1. 告知スレッドへお知らせを投稿（フォロワー全体にプッシュ通知が飛ぶ）
   if (ev.slackTs) {
