@@ -23,19 +23,243 @@ function getOrCreateSheet_(spreadsheet, name, header) {
   return sheet;
 }
 
+/**
+ * 既存シートの見出し行を定義に合わせ直す。
+ *
+ * getOrCreateSheet_ が見出しを書くのはシートを新規作成したときだけなので、
+ * 列を追加してもすでに動いているインスタンスには反映されない。データは
+ * 列番号で読み書きしていて支障なく動いてしまうぶん、見出しだけが古いまま
+ * 残り、シートを開いた人が「この列は何か」を判断できなくなる。
+ * setupEnabledColumn_ が「有効」列の見出しで同じ手当てをしているのと同じ趣旨。
+ *
+ * 対象はシステムが書くシートに限る。人が編集するシートで勝手に見出しを
+ * 戻すと、運営が意図して直した文言を上書きしてしまう。
+ */
+function ensureHeader_(sheet, header) {
+  const current = sheet.getRange(1, 1, 1, header.length).getValues()[0];
+  const matches = header.every(function (label, i) { return current[i] === label; });
+  if (matches) return;
+  sheet.getRange(1, 1, 1, header.length).setValues([header]);
+}
+
+/**
+ * 人が編集するシートの「有効」列に、見出しとドロップダウンを設定する。
+ * 「絵文字転送マッピング」と「師匠リスト」で共通の処理。
+ *
+ * ★ データ行のセルには一切書き込まない ★
+ * 空欄が有効を意味することは見出しで伝える。空欄へ「有効」と書き込めば
+ * 見た目は分かりやすくなるが、人が書くシートにシステムが値を入れることになり、
+ * 自分が書いていない文字がシートに現れる。ヘッダー行はもともと
+ * getOrCreateSheet_ が作る行なので、そこで伝えるぶんには筋が通る。
+ *
+ * チェックボックスにしないのは、空欄と「オフ」を見た目で区別できず、
+ * 行のコピーで意図せず外れる余地もあるため。
+ *
+ * @param {Sheet} sheet 対象シート
+ * @param {number} enabledColumn 「有効」列（0始まり）
+ */
+function setupEnabledColumn_(sheet, enabledColumn) {
+  // 見出しが書かれるのは getOrCreateSheet_ のシート作成時だけなので、
+  // 文言を変えても既存シートには反映されない。ここで追随させる
+  const headerCell = sheet.getRange(1, enabledColumn + 1);
+  if (headerCell.getValue() !== ENABLED_HEADER) headerCell.setValue(ENABLED_HEADER);
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  // 候補以外の入力を弾く（「休止」「オフ」等と書いて止めたつもりになるのを防ぐ）。
+  // ただし貼り付けは入力規則ごとセルを上書きするため、これだけでは防ぎきれない。
+  // すり抜けた値は classifyEnabledFlag_ が判定不能として拾い、運営へ知らせる。
+  // 同期のたびにここで貼り直すので、消された入力規則は次の編集で自動的に戻る。
+  //
+  // 検証範囲を1行だけ余分に広げているのは、新しく足す行にも最初から
+  // ドロップダウンを効かせるため。行が増えてから設定したのでは、
+  // その行の「有効」欄へ先に手入力されたときに素通りしてしまう
+  sheet.getRange(2, enabledColumn + 1, lastRow, 1).setDataValidation(
+    SpreadsheetApp.newDataValidation()
+      .requireValueInList(ENABLED_CHOICES, true)
+      .setAllowInvalid(false)
+      .build()
+  );
+}
+
+// ==================== 管理用スプレッドシートのトリガー ====================
+// 人が管理用①を編集したときの入口。GAS自身の書き込みでは発火しないため、
+// 参加者リストなどへのシステム更新でここが呼ばれることはない。
+
+/**
+ * 編集トリガー（setupTriggers で登録）：セルの値の変更を拾う。
+ * 入力・貼り付け・クリア・元に戻す が該当する。
+ */
+function onManagementSpreadsheetEdit(e) {
+  if (!e || !e.range) return;
+  const name = e.range.getSheet().getName();
+
+  if (name === SHEET_QUIZ_SETTINGS || name === SHEET_QUIZ_QUESTIONS) {
+    // 出題の判定は毎時のトリガーが行う。ここは設定や問題の編集に、
+    // 「クイズ設定」の「次の出題」の表示を追随させるだけ（表示の更新は編集トリガーを起こさない）
+    try {
+      refreshQuizNextLabel_(e.source);
+    } catch (err) {
+      console.warn('「次の出題」の表示を更新できませんでした: ' + err);
+    }
+    return;
+  }
+  if (name === SHEET_MASTER_LIST) {
+    // 師匠リストは編集内容をスクリプトプロパティへ反映する必要がある
+    notifyMasterListSync_(e.source, syncMasterList());
+    // フォームの「所属部屋」の選択肢は、師匠リストの表示名から作る
+    syncVizRoomsFromSheet_(e.source);
+    return;
+  }
+  if (name === SHEET_VIZ_SETTINGS) {
+    // フォームIDが変わったら、送信トリガーをその場で追随させる
+    syncVizSettings_(e.source);
+    return;
+  }
+
+  if (name === SHEET_RELAY_MAPPING) {
+    // 転送マッピングはリアクションの都度シートを直接読むので反映処理は不要。
+    // 入力規則だけ師匠リストと揃える（トーストは出さない。
+    // 反映結果という報せるべき中身が無く、毎回出しても雑音にしかならないため）
+    setupEnabledColumn_(e.range.getSheet(), RELAY_COL.ENABLED);
+    return;
+  }
+  if (name === SHEET_VC_ROOMS) {
+    // 部屋の在庫は割り当てのたびに読み直すので、プロパティへの反映は不要。
+    // ただしフォームの「VC部屋」の選択肢はこのシートが正なので、ここで追随させる。
+    // 部屋を1行足したらフォームでも選べるようになる、を成立させるための処理
+    setupEnabledColumn_(e.range.getSheet(), VC_ROOM_COL.ENABLED);
+    notifyVcRoomSync_(e.source, syncVcRoomChoices());
+  }
+}
+
+/**
+ * 変更トリガー（setupTriggers で登録）：行・シートの削除を拾う。
+ *
+ * onEdit は「セルの値の変更」でしか発火しないため、行を削除しても動かない。
+ * 師匠を外すのに行ごと削除するのは自然な操作なので、これが無いと
+ * 「消したのに効かない」（しかもトーストも出ない）という一番たちの悪い形になる。
+ * シートごと削除された場合も、ここで検知して反映を中止する。
+ *
+ * 対象は師匠リストとVCルームリスト。どちらも「シートの外に持っている状態」
+ * （スクリプトプロパティ / フォームの選択肢）があるため、行が消えたら
+ * そちらも追随させないと辻褄が合わなくなる。転送マッピングは行が消えれば
+ * ルールが消えるだけで、別に持っている状態が無いので追随の必要がない。
+ *
+ * onChange はどのシートが変わったかを教えてくれないため、行削除については
+ * 操作した本人が開いているシートで判定する。シート削除（REMOVE_GRID）は
+ * 削除後に別のシートが開かれるので、その判定はできず両方の同期を試みる。
+ */
+function onManagementSpreadsheetChange(e) {
+  if (!e || !e.source) return;
+  const type = e.changeType;
+
+  if (type === 'REMOVE_ROW') {
+    const active = e.source.getActiveSheet();
+    const name = active ? active.getName() : '';
+    if (name === SHEET_MASTER_LIST) {
+      notifyMasterListSync_(e.source, syncMasterList());
+      syncVizRoomsFromSheet_(e.source);
+    } else if (name === SHEET_VC_ROOMS) {
+      notifyVcRoomSync_(e.source, syncVcRoomChoices());
+    }
+    return;
+  }
+  if (type !== 'REMOVE_GRID') return;
+  notifyMasterListSync_(e.source, syncMasterList());
+  notifyVcRoomSync_(e.source, syncVcRoomChoices());
+}
+
 /** 初回セットアップ：必要なシートを作成する（手動実行用） */
 function initializeSheets() {
   const config = getConfig_();
   openSpreadsheets_(config).forEach(function (ss) {
-    getOrCreateSheet_(ss, SHEET_EVENT_MASTER, EVENT_MASTER_HEADER);
-    getOrCreateSheet_(ss, SHEET_PARTICIPANTS, PARTICIPANTS_HEADER);
+    // システムが書くシートなので、列が増えたときは見出しも追随させる
+    const eventMaster = getOrCreateSheet_(ss, SHEET_EVENT_MASTER, EVENT_MASTER_HEADER);
+    ensureHeader_(eventMaster, EVENT_MASTER_HEADER);
+    protectSystemSheet_(eventMaster);
+    const participants = getOrCreateSheet_(ss, SHEET_PARTICIPANTS, PARTICIPANTS_HEADER);
+    ensureHeader_(participants, PARTICIPANTS_HEADER);
+    protectSystemSheet_(participants);
   });
 
-  // 絵文字転送の2シートは管理用①にのみ作る。
+  // 以降のシートは管理用①にのみ作る。
   // イベントの参加状況とは無関係な運用設定・内部ログなので公開用②へは出さない。
   const management = SpreadsheetApp.openById(config.managementSpreadsheetId);
-  getOrCreateSheet_(management, SHEET_RELAY_MAPPING, RELAY_MAPPING_HEADER);
-  getOrCreateSheet_(management, SHEET_RELAY_LOG, RELAY_LOG_HEADER);
+  const relayMapping = getOrCreateSheet_(management, SHEET_RELAY_MAPPING, RELAY_MAPPING_HEADER);
+  const relayLog = getOrCreateSheet_(management, SHEET_RELAY_LOG, RELAY_LOG_HEADER);
+  ensureHeader_(relayLog, RELAY_LOG_HEADER);   // 列名を変えたときに、稼働中のシートの見出しを追随させる
+  protectSystemSheet_(relayLog);
+  getOrCreateSheet_(management, SHEET_MASTER_LIST, MASTER_LIST_HEADER);
+  // Discord VCの在庫台帳。空のままでも他の機能には影響しない
+  // （開催形式でDiscord VCを選んだときだけ参照される）
+  const vcRooms = getOrCreateSheet_(management, SHEET_VC_ROOMS, VC_ROOM_HEADER);
+  // 一問一答クイズ。「クイズ設定」の投稿先チャンネルを入れるまでは動かないので、
+  // クイズを使わない期でも作っておくだけで害はない
+  const quizQuestions = getOrCreateSheet_(management, SHEET_QUIZ_QUESTIONS, QUIZ_HEADER);
+  // 運営が見出しを直していることもあるので、見出し全体は書き換えず、名前を変えた列だけ追随させる
+  quizQuestions.getRange(1, QUIZ_COL.MESSAGE_TS + 1).setValue(QUIZ_HEADER[QUIZ_COL.MESSAGE_TS]);
+  const addedQuizItems = ensureQuizSettingRows_(
+    getOrCreateSheet_(management, SHEET_QUIZ_SETTINGS, QUIZ_SETTINGS_HEADER));
+  if (addedQuizItems.length > 0) {
+    console.log('「クイズ設定」に項目を追加しました: ' + addedQuizItems.join('、'));
+  }
+  const quizLog = getOrCreateSheet_(management, SHEET_QUIZ_LOG, QUIZ_LOG_HEADER);
+  ensureHeader_(quizLog, QUIZ_LOG_HEADER);
+  protectSystemSheet_(quizLog);
+  try {
+    refreshQuizNextLabel_(management); // 追加した「次の出題」の行に、いまの表示を入れる
+  } catch (err) {
+    console.warn('「次の出題」の表示を更新できませんでした: ' + err);
+  }
+
+  // ナイスチャレンジ。フォームIDと投稿先チャンネルを入れるまでは動かない
+  setupVizReview_(config);
+
+  // 「有効」列を持つ人編集シートは、編集トリガー経由でしか整えられないため
+  // ここで一度通しておく。でないと、誰かがそのシートを編集するまで
+  // 見出しもドロップダウンも入らない
+  // （師匠リストは、この直後に呼ばれる syncMasterList が受け持つ）
+  setupEnabledColumn_(relayMapping, RELAY_COL.ENABLED);
+  setupEnabledColumn_(vcRooms, VC_ROOM_COL.ENABLED);
+
+  openSpreadsheets_(config).forEach(removeBlankDefaultSheet_);
+}
+
+/**
+ * システムが書くシートに「編集すると警告が出る」保護をかける。
+ *
+ * 管理用①は運営のグループ全員が編集者になるので、Bot専用のシートも手で
+ * 触れてしまう。イベントマスターを手で直しても Slack の告知には反映されず、
+ * 絵文字転送ログの行を消すと同じメッセージが再転送されうる。
+ * 警告どまりにしているのは、どうしても直したいときに直せる道を残すため
+ * （警告のみの保護はスクリプトの書き込みを止めない）。
+ *
+ * すでに何かシート保護がかかっていれば触らない。運営が自分で設定した
+ * 保護（編集者の制限など）を上書きしないため。
+ */
+function protectSystemSheet_(sheet) {
+  if (sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).length > 0) return;
+  sheet.protect()
+    .setDescription('Botが書き込むシートです。手で編集すると Slack の告知などとずれます')
+    .setWarningOnly(true);
+}
+
+/**
+ * スプレッドシート作成時に付いてくる空の「シート1」を消す。
+ * 残しておくと、公開用を開いたメンバーに最初に空のシートが見える。
+ *
+ * 既定の名前のままで、かつ何も書かれていないものだけを対象にする。
+ * 運営が名前を変えたり何か書いたりしたシートは、用途があるとみなして残す。
+ */
+function removeBlankDefaultSheet_(spreadsheet) {
+  spreadsheet.getSheets().forEach(function (sheet) {
+    if (!/^(シート|Sheet)1$/.test(sheet.getName())) return;
+    if (sheet.getLastRow() > 0 || sheet.getLastColumn() > 0) return;
+    if (spreadsheet.getSheets().length <= 1) return; // 最後の1枚は消せない
+    spreadsheet.deleteSheet(sheet);
+  });
 }
 
 // ==================== イベントマスター ====================
@@ -65,6 +289,7 @@ function eventToRow_(ev) {
   row[COL.CREATED_AT] = ev.createdAt;
   row[COL.UPDATED_AT] = ev.updatedAt;
   row[COL.TYPE] = ev.type || EVENT_TYPE.DISCIPLE;
+  row[COL.VC_ROOM] = ev.vcRoom || '';
   return row;
 }
 
@@ -89,7 +314,10 @@ function rowToEvent_(row) {
     editUrl: row[COL.EDIT_URL],
     createdAt: row[COL.CREATED_AT],
     updatedAt: row[COL.UPDATED_AT],
-    type: row[COL.TYPE] || EVENT_TYPE.DISCIPLE
+    type: row[COL.TYPE] || EVENT_TYPE.DISCIPLE,
+    // VCルーム列を持たない時代の行は undefined になるので空文字へ倒す。
+    // ここを省くと vcRoomsInUse_ の判定で undefined が紛れ込む
+    vcRoom: String(row[COL.VC_ROOM] || '')
   };
 }
 
@@ -150,6 +378,24 @@ function findEvent_(config, predicate) {
     if (predicate(ev)) return ev;
   }
   return null;
+}
+
+/**
+ * 条件に一致するイベントを全件返す。
+ * VC部屋の被り判定のように「最初の1件」では足りない用途で使う
+ * （同じ時間帯に何部屋押さえられているかを知る必要があるため）。
+ */
+function filterEvents_(config, predicate) {
+  const sheet = SpreadsheetApp.openById(config.managementSpreadsheetId)
+    .getSheetByName(SHEET_EVENT_MASTER);
+  if (!sheet) return [];
+  const values = sheet.getDataRange().getValues();
+  const found = [];
+  for (let i = 1; i < values.length; i++) {
+    const ev = rowToEvent_(values[i]);
+    if (predicate(ev)) found.push(ev);
+  }
+  return found;
 }
 
 /** フォーム回答IDでイベントを検索（回答編集の照合に使用） */

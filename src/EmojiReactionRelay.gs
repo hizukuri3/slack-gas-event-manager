@@ -20,13 +20,41 @@ function handleSlackEvent_(body) {
   const config = getConfig_();
 
   // 署名検証ができないため、InteractionHandler と同じく token 照合で代替する
-  if (config.slackVerificationToken && body.token !== config.slackVerificationToken) {
+  if (body.token !== config.slackVerificationToken) {
     return;
   }
 
   const event = body.event || {};
+
+  // スレッド返信（ナイスチャレンジの記録）。message イベントには item が無いので、
+  // リアクションの判定より前に受ける。ここで返し、転送の処理には進まない
+  if (event.type === 'message') {
+    try {
+      handleVizReply_(config, event);
+    } catch (err) {
+      console.error('ナイスチャレンジの返信記録でエラー: ' + err);
+    }
+    return;
+  }
+
   // ファイルやファイルコメントへのリアクションは転送対象外
   if (!event.item || event.item.type !== 'message') return;
+
+  // クイズの出題メッセージへのリアクション記録（Quiz.gs）。転送とは独立した機能で、
+  // 同じ絵文字が両方に設定されていれば両方が動く。クイズ側の失敗で転送まで
+  // 止めないよう、ここで受け止める
+  try {
+    handleQuizReaction_(config, event);
+  } catch (err) {
+    console.error('クイズのリアクション記録でエラー: ' + err);
+  }
+
+  // ナイスチャレンジの投稿へのスタンプ記録（VizReview.gs）。これも独立した機能
+  try {
+    handleVizReaction_(config, event);
+  } catch (err) {
+    console.error('ナイスチャレンジのスタンプ記録でエラー: ' + err);
+  }
 
   if (event.type === 'reaction_added') {
     handleReactionAdded_(config, event);
@@ -91,7 +119,7 @@ function handleReactionAdded_(config, event) {
  *
  * ロック内では「ログ行の予約」だけを行い、Slackへの投稿はロック外で実行する
  * （InteractionHandler と同じくロック保持時間を最小化する方針）。
- * 予約行は転送先TSが空のまま先に入るため、同時押しやSlackの再送はここで弾かれる。
+ * 予約行は転送先メッセージIDが空のまま先に入るため、同時押しやSlackの再送はここで弾かれる。
  */
 function forwardOnce_(config, srcChannel, srcTs, emoji, destChannel, permalink, srcText) {
   const key = buildForwardKey_(srcChannel, srcTs, emoji, destChannel);
@@ -121,7 +149,7 @@ function forwardOnce_(config, srcChannel, srcTs, emoji, destChannel, permalink, 
     return;
   }
   // 投稿に失敗した予約は無効化して、次に同じ絵文字が押されたら再挑戦できるようにする。
-  // 行自体は残すため、転送先TSが空のまま取り消し日時が入った行＝転送失敗の記録になる
+  // 行自体は残すため、転送先メッセージIDが空のまま取り消し日時が入った行＝転送失敗の記録になる
   markForwardLogRemoved_(config, [key]);
 }
 
@@ -187,22 +215,11 @@ function listForwardRules_(config, emoji) {
   const rules = [];
   for (let i = 1; i < values.length; i++) {
     if (normalizeEmojiName_(values[i][RELAY_COL.EMOJI]) !== emoji) continue;
-    if (!isRelayEnabled_(values[i][RELAY_COL.ENABLED])) continue;
+    if (!isEnabledFlag_(values[i][RELAY_COL.ENABLED])) continue;
     const toChannel = String(values[i][RELAY_COL.TO_CHANNEL] || '').trim();
     if (toChannel) rules.push({ toChannel: toChannel });
   }
   return rules;
-}
-
-/**
- * 「有効」列の判定。行を書いた時点で有効とみなしたいので空欄は有効扱いにし、
- * 明示的に FALSE / いいえ と書いたときだけ止める。
- */
-function isRelayEnabled_(value) {
-  if (value === '' || value === null || value === undefined) return true;
-  if (typeof value === 'boolean') return value;
-  const text = String(value).trim().toUpperCase();
-  return text !== 'FALSE' && text !== 'NO' && text !== '0' && text !== 'いいえ';
 }
 
 /**
@@ -288,7 +305,7 @@ function findActiveForwardLogRow_(config, key) {
 }
 
 /**
- * 転送前に「予約」としてログ行を先に入れる。転送先TSは投稿成功後に埋める。
+ * 転送前に「予約」としてログ行を先に入れる。転送先メッセージIDは投稿成功後に埋める。
  *
  * ts（例: 1784563559.123456）はシートで数値化されると小数部が失われ、
  * chat.delete が失敗する。先頭にアポストロフィを付けて必ず文字列として保存する

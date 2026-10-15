@@ -10,59 +10,335 @@ function setupTriggers() {
   // 二重登録を防ぐため既存の同名トリガーを削除
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     const handler = trigger.getHandlerFunction();
-    if (handler === 'onFormSubmit' || handler === 'syncPublicSheets') {
+    if (handler === 'onFormSubmit' || handler === 'syncPublicSheets' ||
+        handler === 'onManagementSpreadsheetEdit' ||
+        handler === 'onManagementSpreadsheetChange' || handler === 'postDailyQuiz' ||
+        handler === 'cleanupVizResponses') {
       ScriptApp.deleteTrigger(trigger);
     }
   });
+  // 一問一答クイズの出題（毎時）。投稿時刻はクイズ設定シートで判定するので、
+  // 時刻を変えてもトリガーの登録し直しは要らない。投稿先チャンネルが空なら即終了する
+  ScriptApp.newTrigger('postDailyQuiz')
+    .timeBased()
+    .everyHours(1)
+    .create();
+  // ナイスチャレンジ：期限を過ぎたフォームの回答を削除する（毎日。使っていなければ即終了する）
+  ScriptApp.newTrigger('cleanupVizResponses')
+    .timeBased()
+    .everyDays(1)
+    .atHour(4)
+    .create();
   // 公開用シートへの参加者リスト定期同期（5分毎）
   ScriptApp.newTrigger('syncPublicSheets')
     .timeBased()
     .everyMinutes(5)
     .create();
+  // 管理用①の「師匠リスト」シートの編集を、その場でスクリプトプロパティへ反映する。
+  // onEdit（セルの値の変更）と onChange（行・シートの削除）の両方が要る。
+  // 行削除は onEdit では発火しないため、片方だけだと「消したのに効かない」が起きる
+  ScriptApp.newTrigger('onManagementSpreadsheetEdit')
+    .forSpreadsheet(config.managementSpreadsheetId)
+    .onEdit()
+    .create();
+  ScriptApp.newTrigger('onManagementSpreadsheetChange')
+    .forSpreadsheet(config.managementSpreadsheetId)
+    .onChange()
+    .create();
   // 弟子用・師匠用（設定されていれば）の両フォームにトリガーを登録
-  const formIds = [config.formId];
-  if (config.masterFormId && config.masterFormId !== config.formId) {
-    formIds.push(config.masterFormId);
-  }
-  formIds.forEach(function (formId) {
+  formIds_(config).forEach(function (formId) {
     ScriptApp.newTrigger('onFormSubmit')
       .forForm(formId)
       .onFormSubmit()
       .create();
-    applyFormHints_(formId);
   });
   initializeSheets();
+  // 設問の追加 → 選択肢・ヒントの反映、の順で通す。initializeSheets() の後に
+  // 回すのは、VC部屋の選択肢はVCルームリストが正で、シートが出来ていないと
+  // 空になるため
+  syncFormItems();
+  syncVcRoomChoices();
+  // 師匠リストシートの内容をプロパティへ反映する。
+  // プロパティで師匠を管理していた既存インスタンスは、ここで初回移行が走る
+  syncMasterList();
+  // ナイスチャレンジ用フォームの送信トリガーは、上の initializeSheets() 内の setupVizReview_ が登録し直す
+  // （この関数の頭で onFormSubmit のトリガーを一度全部消しているため）
 }
 
 /**
- * フォームの設問に入力ヒント（説明文）を自動設定する。
- * 特に無料版Meetの60分制限と予定分割の挙動を、入力時点で主催者に伝える。
+ * フォームの設問に入力ヒント（説明文）と選択肢を反映する。
+ *
+ * 選択肢まで面倒を見るのは、開催形式もVC部屋も「コード／シートが正」で、
+ * フォームはその写しにすぎないため。buildFormItems_（Bootstrap.gs）は
+ * フォームを新規作成したときにしか走らないので、そちらだけを直しても
+ * すでに動いているインスタンスには永久に反映されない。ここを通しておけば
+ * setupTriggers() の実行で既存フォームも追随する。
+ *
+ * ★ ヘルプ文は、記入する人がその場で選ぶのに要ることだけに絞る ★
+ * カレンダーの分割や差し戻しの条件といった仕組みは書かない。知らなくても
+ * 記入には困らず、差し戻しになれば理由と直し方がDMで届くため。
+ * 長い説明は読まれず、本当に要る一文まで埋もれる。
+ *
+ * FormApp.openById() は1回およそ1秒かかるが、この関数はセットアップと
+ * シート編集トリガーからしか呼ばれず、Slackの3秒ルールの外にある。
  */
-function applyFormHints_(formId) {
+function applyFormHints_(formId, vcRoomChoices, displayTitle) {
   const form = FormApp.openById(formId);
+  form.setTitle(displayTitle);
+  const sectioned = applyFormSections_(form);
+
   form.getItems().forEach(function (item) {
     const title = item.getTitle();
-    if (title === FORM_TITLES.FORMAT) {
+
+    if (title === FORM_TITLES.ORGANIZER) {
       item.setHelpText(
-        '①オンライン・自動発行は無料版Google Meetを使用します。' +
-        '3人以上の通話は60分で自動切断されるため、60分を超えるイベントは' +
-        'カレンダー予定が60分ごとに自動分割されます（各回で別々のMeet URLを発行。' +
-        '切れても次の回のURLへ待ち時間なしで入室可能）。切断なしで開催したい場合は' +
-        '②を選び、時間制限のないツールのURLを入力してください。'
+        'Slackで /event と打つと、この欄が入力済みのフォームが開けます。' +
+        '手で入れるときは、Slackのプロフィール →「︙」→「メンバーIDをコピー」で調べられます（U から始まる文字列）。' +
+        '編集用URLなどのDMの送り先に使います。'
+      );
+      if (item.getType() === FormApp.ItemType.TEXT) {
+        // 受け付ける形は normalizeSlackUserId_ に合わせる。Slackからコピーして貼ると
+        // <@U123> や @U123 の形になるので、それも通す（サーバー側で U123 に揃える）
+        item.asTextItem().setValidation(FormApp.createTextValidation()
+          .setHelpText('SlackユーザーIDを入力してください（U から始まる文字列）。')
+          .requireTextMatchesPattern('^\\s*(<@|@)?[UWuw][A-Za-z0-9]{4,}(\\|[^>]*)?>?\\s*$')
+          .build());
+      }
+    }
+
+    if (title === FORM_TITLES.FORMAT) {
+      // セクションがあれば選択肢は applyFormSections_ が行き先付きで貼っている。
+      // ここで値だけ貼り直すと行き先が消えるので、無いときだけ貼る
+      if (!sectioned) setChoicesIfMultipleChoice_(item, EVENT_FORMAT_VALUES);
+      item.setHelpText(
+        EVENT_FORMATS.DISCORD + ' と ' + EVENT_FORMATS.MEET + ' は会場URLが自動で入ります。\n' +
+        EVENT_FORMATS.MEET + ' は60分で切れるため、長いイベントは1時間ごとに別のURLになります。'
       );
     }
-    if (title === FORM_TITLES.LOCATION) {
+
+    if (title === FORM_TITLES.VC_ROOM) {
+      if (vcRoomChoices && vcRoomChoices.length > 0) {
+        setChoicesIfMultipleChoice_(item, vcRoomChoices);
+      }
+      // セクションが無い古いフォームでは全員に見えるので、対象の形式を添える
       item.setHelpText(
-        '開催形式が「②オンライン・手動URL」「③オフライン・対面」の場合は必須です。' +
-        '「①オンライン・自動発行」の場合は空欄のままにしてください（Meet URLが自動で入ります）。'
+        (sectioned ? '' : EVENT_FORMATS.DISCORD + ' のときだけ選んでください。') +
+        '特に希望がなければ「' + VC_ROOM_AUTO + '」で大丈夫です。'
       );
+    }
+
+    if (title === FORM_TITLES.LOCATION) {
+      item.setHelpText(sectioned
+        ? 'オンラインなら参加用のURL、対面なら場所を入力してください。'
+        : '「' + EVENT_FORMATS.OTHER_ONLINE + '」「' + EVENT_FORMATS.OFFLINE +
+          '」のときだけ入力してください。');
     }
   });
+}
+
+/**
+ * 開催形式の回答で、次に進むセクションを切り替える（行き先は FORM_SECTIONS のコメント参照）。
+ * Discord VC を選んだ人にだけ「VC部屋」、URLや場所が要る形式の人にだけ
+ * 「会場のURLまたは場所」を見せ、それぞれ必須にする。
+ *
+ * 行き先はフォーム上の設定なので、選択肢を setChoiceValues で貼り直すと消える。
+ * 選択肢はここで行き先付きで作り直す。
+ *
+ * セクションか設問が1つでも見つからなければ何もしない（false を返す）。
+ * 中途半端に行き先を付けると、設問を飛ばしたり、見えない設問が必須で
+ * 送信できなくなったりするため。VC部屋・会場は任意のままにしておく。
+ *
+ * @return {boolean} セクションの切り替えを設定できたか
+ */
+function applyFormSections_(form) {
+  const format = findFormItemByTitle_(form, FORM_TITLES.FORMAT);
+  const vcRoom = findFormItemByTitle_(form, FORM_TITLES.VC_ROOM);
+  const location = findFormItemByTitle_(form, FORM_TITLES.LOCATION);
+  const vcSection = findPageBreakByTitle_(form, FORM_SECTIONS.VC_ROOM);
+  const venueSection = findPageBreakByTitle_(form, FORM_SECTIONS.VENUE);
+  const detailsSection = findPageBreakByTitle_(form, FORM_SECTIONS.DETAILS);
+  if (!format || format.getType() !== FormApp.ItemType.MULTIPLE_CHOICE ||
+      !vcRoom || !location || !vcSection || !venueSection || !detailsSection) {
+    return false;
+  }
+  // 並びが崩れていると、行き先の先に別の設問が混ざる。運営が手で動かした場合は触らない
+  if (!(format.getIndex() < vcSection.getIndex() &&
+        vcSection.getIndex() < vcRoom.getIndex() &&
+        vcRoom.getIndex() < venueSection.getIndex() &&
+        venueSection.getIndex() < location.getIndex() &&
+        location.getIndex() < detailsSection.getIndex())) {
+    console.warn('フォームのセクションの並びが定義と違うため、開催形式による切り替えを設定しませんでした (' +
+      form.getId() + ')');
+    return false;
+  }
+
+  const destinations = {};
+  destinations[EVENT_FORMATS.DISCORD] = vcSection;
+  destinations[EVENT_FORMATS.MEET] = detailsSection;
+  destinations[EVENT_FORMATS.OTHER_ONLINE] = venueSection;
+  destinations[EVENT_FORMATS.OFFLINE] = venueSection;
+  const formatItem = format.asMultipleChoiceItem();
+  formatItem.setChoices(EVENT_FORMAT_VALUES.map(function (value) {
+    return formatItem.createChoice(value, destinations[value]);
+  }));
+
+  // VC部屋のセクションを終えたら、会場のセクションを飛ばして内容へ進む。
+  // （このページ区切りの行き先＝ひとつ前のセクションを終えたときの行き先）
+  venueSection.setGoToPage(detailsSection);
+
+  // 通る人にしか見えないので、必須にしても他の形式の人の邪魔にならない
+  setRequiredIfPossible_(vcRoom, true);
+  setRequiredIfPossible_(location, true);
+  return true;
+}
+
+/** タイトルが一致するページ区切り（セクション）を返す（無ければ null） */
+function findPageBreakByTitle_(form, title) {
+  const item = findFormItemByTitle_(form, title);
+  if (!item || item.getType() !== FormApp.ItemType.PAGE_BREAK) return null;
+  return item.asPageBreakItem();
+}
+
+/** 必須の切り替えができる型なら切り替える（型が変わっていても止まらないように） */
+function setRequiredIfPossible_(item, required) {
+  switch (item.getType()) {
+    case FormApp.ItemType.MULTIPLE_CHOICE:
+      item.asMultipleChoiceItem().setRequired(required); break;
+    case FormApp.ItemType.TEXT:
+      item.asTextItem().setRequired(required); break;
+  }
+}
+
+/**
+ * 選択式の設問なら選択肢を差し替える。
+ * 型を確かめてから触るのは、設問を作り直して型が変わっていた場合に
+ * asMultipleChoiceItem() が例外を投げ、ヒント付与ごと止まってしまうため。
+ */
+function setChoicesIfMultipleChoice_(item, choices) {
+  if (item.getType() !== FormApp.ItemType.MULTIPLE_CHOICE) return;
+  item.asMultipleChoiceItem().setChoiceValues(choices);
+}
+
+/**
+ * VCルームリストの内容をフォームの「VC部屋」設問へ反映する。
+ * 管理用①のシート編集・行削除トリガーから呼ばれ、部屋を1行足すと
+ * その場でフォームでも選べるようになる。
+ * @return {{roomCount: number, formCount: number, failed: number}}
+ */
+function syncVcRoomChoices() {
+  const config = getConfig_();
+  const choices = vcRoomChoiceValues_(config);
+  const formIds = formIds_(config);
+
+  let formCount = 0;
+  let failed = 0;
+  formIds.forEach(function (formId) {
+    try {
+      applyFormHints_(formId, choices, formDisplayTitle_(config, formId));
+      formCount++;
+    } catch (err) {
+      // 片方のフォームが壊れていても、もう片方の反映は続ける
+      failed++;
+      console.warn('VC部屋の選択肢を反映できませんでした (' + formId + '): ' + err);
+    }
+  });
+  // 先頭の「おまかせ」は部屋ではないので数から外す
+  const result = { roomCount: choices.length - 1, formCount: formCount, failed: failed };
+  // 師匠リストと同じく実行ログにも残す。シート編集トリガーからはトーストが出るが、
+  // setupTriggers() から呼ばれたときは何も出ず、反映されたのか分からなくなるため
+  console.log('使えるVC部屋をフォームへ反映しました: ' + result.roomCount + '件' +
+    '（対象フォーム' + result.formCount + '件）');
+  return result;
+}
+
+/**
+ * コード側の設問定義（formSpec_）にまだ追いついていない設問を、両フォームへ追加する。
+ * 既存の設問には触れないので、何度実行しても増えるのは足りない設問だけ。
+ *
+ * 稼働中のインスタンスで設問を増やしたときの唯一の追随経路。フォームを作り直すと
+ * 主催者が持っている回答編集URLがすべて無効になるため、作り直しは避けたい。
+ * あわせて、回答の編集許可などのフォーム設定もそろえる（applyFormSettings_）。
+ *
+ * @return {{added: string[], formCount: number, failed: number}}
+ */
+function syncFormItems() {
+  const config = getConfig_();
+  const renamed = [];
+  const added = [];
+  let formCount = 0;
+  let failed = 0;
+  // 弟子用・師匠用で同じ内容になるのが普通なので、ログは重複を除いて1行にまとめる
+  const collect = function (list, values) {
+    values.forEach(function (v) { if (list.indexOf(v) === -1) list.push(v); });
+  };
+
+  formIds_(config).forEach(function (formId) {
+    try {
+      const form = FormApp.openById(formId);
+      applyFormSettings_(form);
+      const result = ensureFormItems_(form);
+      collect(renamed, result.renamed);
+      collect(added, result.added);
+      formCount++;
+    } catch (err) {
+      // 片方のフォームが壊れていても、もう片方の追随は続ける
+      failed++;
+      console.warn('設問を追加できませんでした (' + formId + '): ' + err);
+    }
+  });
+
+  const suffix = '（対象フォーム' + formCount + '件）';
+  if (renamed.length > 0) {
+    console.log('フォームの設問を改名しました: ' + renamed.join(' / ') + suffix);
+  }
+  if (added.length > 0) {
+    console.log('フォームへ設問を追加しました: ' + added.join(' / ') + suffix);
+  }
+  if (renamed.length === 0 && added.length === 0) {
+    console.log('フォームの設問は定義どおりです' + suffix);
+  }
+  return { renamed: renamed, added: added, formCount: formCount, failed: failed };
+}
+
+/** 弟子用・師匠用（設定されていれば）のフォームIDを返す */
+function formIds_(config) {
+  const ids = [config.formId];
+  if (config.masterFormId && config.masterFormId !== config.formId) {
+    ids.push(config.masterFormId);
+  }
+  return ids.filter(function (id) { return Boolean(id); });
+}
+
+/**
+ * フォームIDに対応する表示タイトル。師匠用フォームだけ師匠向けにする。
+ * 弟子用と同じIDが師匠用にも入っている場合は、formIds_ と同じく弟子用として扱う
+ */
+function formDisplayTitle_(config, formId) {
+  return formId === config.masterFormId && formId !== config.formId
+    ? FORM_DISPLAY_TITLES.MASTER
+    : FORM_DISPLAY_TITLES.DISCIPLE;
+}
+
+/** VC部屋の同期結果を、操作した人へトーストで知らせる（師匠リストと同じ流儀） */
+function notifyVcRoomSync_(spreadsheet, result) {
+  if (!spreadsheet) return;
+  let message = '使えるVC部屋 ' + result.roomCount + '件をフォームへ反映しました';
+  if (result.roomCount === 0) {
+    message = '使えるVC部屋が0件です。この状態で「' + EVENT_FORMATS.DISCORD +
+      '」を選ぶと登録できません（VC名とチャンネルURLの両方が必要です）';
+  }
+  if (result.failed > 0) {
+    message += ' / ' + result.failed + '件のフォームへは反映できませんでした（ログを確認してください）';
+  }
+  spreadsheet.toast(message, SHEET_VC_ROOMS, result.roomCount === 0 || result.failed > 0 ? 20 : 8);
 }
 
 /** フォーム送信時のメイン処理（新規登録と回答編集の両方が飛んでくる） */
 function onFormSubmit(e) {
   const config = getConfig_();
+  // ナイスチャレンジ用フォームの送信はイベント登録とは別の処理（VizReview.gs）。
+  // 同じ onFormSubmit トリガーに乗ってくるので、送信元のフォームで振り分ける
+  if (handleVizFormSubmit_(config, e)) return;
   const formResponse = e.response;
   const responseId = formResponse.getId();
   // 送信元フォームで種別を判定（師匠用フォーム経由 = 師匠イベント）
@@ -70,7 +346,16 @@ function onFormSubmit(e) {
     e.source.getId() === config.masterFormId;
 
   const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
+  try {
+    lock.waitLock(30000);
+  } catch (err) {
+    // 取れないまま例外で抜けると、送信は誰にも知らされずに失われる。
+    // 主催者へ編集用URL付きで知らせ、送り直してもらう
+    console.warn('フォーム送信のロック取得に失敗しました: ' + responseId);
+    notifyFormError_(config, formResponse,
+      ['ただいま混み合っていて処理できませんでした。少し時間をおいて、そのまま再送信してください。']);
+    return;
+  }
   try {
     // 1. 回答の取り出し（日時の解釈に失敗したら主催者へDMで通知して終了）
     let answers;
@@ -83,22 +368,52 @@ function onFormSubmit(e) {
 
     // 2. 入力検証（不備があれば登録・更新せず、修正用リンク付きでDM通知）
     const existing = findEventByResponseId_(config, responseId);
+
+    // 形式は正しいがSlackに存在しないID（打ち間違い）は、登録も告知もしない。
+    // 実在しない人へはDMが届かず、入力不備の通知も編集用URLも渡せないため、他の検証より先に行う。
+    // 確認するのは新規と、編集で主催者IDを変えたときだけ（変えていなければAPIを呼ばない）。
+    // 形式が不正なIDは、下の検証が従来どおり扱う
+    const organizerChanged = !existing || existing.organizer !== answers.organizer;
+    if (isValidSlackUserId_(answers.organizer) && organizerChanged &&
+        !slackUserExists_(config, answers.organizer)) {
+      console.warn('主催者のSlackユーザーIDが見つかりません。登録しませんでした: ' + responseId);
+      postOrganizerUnreachableNotice_(config, '主催者のSlackユーザーIDがSlackに見つからないため、登録していません');
+      return;
+    }
+
     const errors = validateAnswers_(answers, existing);
     if (errors.length > 0) {
       notifyFormError_(config, formResponse, errors);
       return;
     }
 
-    if (existing) {
-      handleEventEdit_(config, existing, answers);
-    } else {
-      // 3. 二重登録ガード（「編集のつもりで新規送信」対策）
+    // 3. 二重登録ガード（「編集のつもりで新規送信」対策）
+    if (!existing) {
       const duplicate = findDuplicateEvent_(config, answers);
       if (duplicate) {
         notifyDuplicateEvent_(config, answers, duplicate);
         return;
       }
-      handleNewEvent_(config, formResponse, answers, isMaster);
+    }
+
+    try {
+      if (existing) {
+        handleEventEdit_(config, existing, answers, formResponse);
+      } else {
+        handleNewEvent_(config, formResponse, answers, isMaster);
+      }
+    } catch (err) {
+      // 途中で止まっても、主催者には何も届かず、誰も気づけなかった。知らせて、実行は失敗のまま残す
+      // （GASの実行履歴に失敗として残り、原因を追える）
+      console.error('フォーム送信の処理に失敗しました（' + responseId + '）: ' + (err && err.stack ? err.stack : err));
+      try {
+        notifyFormError_(config, formResponse, [
+          '処理の途中でエラーが起きました。少し時間をおいて、同じURLからもう一度送信してください。' +
+          '何度やっても同じ場合は、運営にお問い合わせください。']);
+      } catch (notifyErr) {
+        console.error('主催者への通知にも失敗しました: ' + notifyErr);
+      }
+      throw err;
     }
   } finally {
     lock.releaseLock();
@@ -122,7 +437,11 @@ function extractAnswers_(formResponse) {
     end: end,
     capacity: Number(map[FORM_TITLES.CAPACITY]),
     status: String(map[FORM_TITLES.STATUS] || ''),
-    format: String(map[FORM_TITLES.FORMAT] || ''),
+    // 判定は EVENT_FORMATS との完全一致なので、入り口で前後の空白を落としておく
+    format: String(map[FORM_TITLES.FORMAT] || '').trim(),
+    // 設問そのものが無い古いフォームでは空になる。assignVcRoom_ は
+    // 空を「おまかせ」と同じ扱いにするので、それでも登録は通る
+    vcRoom: String(map[FORM_TITLES.VC_ROOM] || '').trim(),
     location: String(map[FORM_TITLES.LOCATION] || '').trim(),
     description: String(map[FORM_TITLES.DESCRIPTION] || ''),
     preparation: String(map[FORM_TITLES.PREPARATION] || '')
@@ -145,17 +464,17 @@ function combineEndTime_(start, value) {
   return end;
 }
 
-/** 「@名前」「<@U123>」等の揺れを補正してSlackユーザーIDだけを取り出す */
-function normalizeSlackUserId_(value) {
-  return String(value || '').trim().replace(/^<@/, '').replace(/>$/, '').replace(/^@/, '');
-}
-
 /** SlackユーザーIDとして妥当な形式かどうか（U/W始まりの英数字） */
 function isValidSlackUserId_(id) {
   return /^[UW][A-Z0-9]{4,}$/.test(String(id || ''));
 }
 
 // ==================== 入力検証・二重登録ガード ====================
+
+// 1件のイベントの長さの上限（時間）。combineEndTime_ は終了が開始以前だと翌日扱いにするので、
+// 14:00開始・13:00終了のような打ち間違いが23時間のイベントとして通ってしまう（Meetの自動発行なら
+// 60分ごとの予定が約23件できる）。ここで差し戻す。12時間を超える会は無い前提
+const MAX_EVENT_HOURS = 12;
 
 /**
  * フォーム回答を検証してエラー文言の配列を返す（空配列なら問題なし）。
@@ -176,12 +495,31 @@ function validateAnswers_(answers, existing) {
   if (startChanged && answers.start.getTime() < Date.now()) {
     errors.push('開始日時が過去になっています。日付・時刻を確認してください。');
   }
+  // 中止から開催に戻す編集は、すでに終了した日時のままでは戻せない（戻しても、参加ボタンが使えない）
+  const revived = Boolean(existing) && isCancelledStatus_(existing.status) && !isCancelledStatus_(answers.status);
+  if (revived && !startChanged && answers.end.getTime() < Date.now()) {
+    errors.push('終了した日時のイベントは、開催に戻せません。開始日時・終了時刻を、これからの日時に直してください。');
+  }
+  // 長さの上限も、日時を変えたときだけ見る（長い既存イベントを、日時を変えずに中止できなくなるため）
+  const timeChanged = !existing || startChanged || existing.end.getTime() !== answers.end.getTime();
+  const hours = (answers.end.getTime() - answers.start.getTime()) / (60 * 60 * 1000);
+  if (timeChanged && hours > MAX_EVENT_HOURS) {
+    errors.push('開始から終了まで約' + Math.round(hours) + '時間になっています（上限は' + MAX_EVENT_HOURS +
+      '時間）。「' + FORM_TITLES.END_TIME + '」を確認してください。');
+  }
   if (!Number.isInteger(answers.capacity) || answers.capacity < 1) {
     errors.push('定員は1以上の整数で入力してください。');
   }
-  if (!isAutoMeet_(answers.format) && !answers.location) {
-    errors.push('開催形式が「②オンライン・手動URL」「③オフライン・対面」の場合、' +
-      '「会場URL または 開催場所」の入力は必須です。');
+  // 開催形式は選択肢のどれかでなければならない。一致しない値が届くのは、フォームの
+  // 選択肢が手で書き換えられたときで、放っておくと「会場URLが要る形式」として静かに
+  // 扱われる。ここで弾いておけば、運営がその場で気づける
+  if (EVENT_FORMAT_VALUES.indexOf(answers.format) === -1) {
+    errors.push('開催形式「' + answers.format + '」は選択肢にありません。' +
+      'フォームの選択肢が書き換えられた可能性があります。運営にお問い合わせください。');
+  } else if (!isAutoMeet_(answers.format) && !isDiscordVc_(answers.format) && !answers.location) {
+    // Discord VCとMeet自動発行は、会場URLをシステムが埋めるので入力を求めない
+    errors.push('開催形式が「' + EVENT_FORMATS.OTHER_ONLINE + '」「' + EVENT_FORMATS.OFFLINE +
+      '」の場合、「' + FORM_TITLES.LOCATION + '」の入力は必須です。');
   }
   return errors;
 }
@@ -207,14 +545,21 @@ function notifyFormError_(config, formResponse, errors) {
       '以下のURLから修正して再送信してください:\n' + formResponse.getEditResponseUrl()
     );
   } else {
-    // DMの宛先が分からないため、告知チャンネルで心当たりのある人へ案内
-    postMessage_(
-      config, config.slackChannelId,
-      ':warning: フォームからのイベント登録を受け付けられませんでした' +
-      '（主催者のSlackユーザーIDが不正なため、通知をお送りできません）。\n' +
-      '心当たりのある方は、Slackで `/event` を実行して届くフォームから再登録してください。'
-    );
+    postOrganizerUnreachableNotice_(config, '主催者のSlackユーザーIDが不正なため、通知をお送りできません');
   }
+}
+
+/**
+ * 主催者へDMを送れないとき、告知チャンネルで心当たりのある人へ案内する。
+ * @param {string} reason 理由（括弧書きで添える）
+ */
+function postOrganizerUnreachableNotice_(config, reason) {
+  postMessage_(
+    config, config.slackChannelId,
+    ':warning: フォームからのイベント登録を受け付けられませんでした' +
+    '（' + reason + '）。\n' +
+    '心当たりのある方は、Slackで `/event` を実行して届くフォームから再登録してください。'
+  );
 }
 
 /**
@@ -273,8 +618,22 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
     slackTs: '',
     editUrl: formResponse.getEditResponseUrl(),
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    vcRoom: ''
   };
+
+  // 0. Discord VCなら部屋を確保する。カレンダー登録より先に済ませるのは、
+  //    確保できなかったときにカレンダー予定も告知も作らずに差し戻すため
+  //    （先に作ってしまうと、差し戻しのたびに孤児の予定が残る）
+  if (isDiscordVc_(ev.format)) {
+    const assigned = assignVcRoom_(config, ev, answers.vcRoom);
+    if (!assigned.room) {
+      notifyFormError_(config, formResponse, assigned.errors);
+      return;
+    }
+    ev.vcRoom = assigned.room.name;
+    ev.location = assigned.room.url;
+  }
 
   // 1. カレンダー登録（自動発行の場合はMeet URLを取得して場所に採用。60分超なら分割）
   const calendarResult = createCalendarEvents_(config, ev);
@@ -286,23 +645,51 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
 
   // 2. Slack告知投稿（参加/取り消しボタン付きBlock Kitメッセージ）
   const participantsUrl = buildParticipantsPageUrl_(config, eventId);
-  const msg = buildAnnouncementBlocks_(ev, [], participantsUrl, buildCalendarViewUrl_(config));
-  const ts = postMessage_(config, config.slackChannelId, msg.text, null, msg.blocks);
-  if (ts) {
-    ev.slackTs = ts;
+  let ts = null;
+  try {
+    const msg = buildAnnouncementBlocks_(ev, [], participantsUrl, buildCalendarViewUrl_(config));
+    ts = postMessage_(config, config.slackChannelId, msg.text, null, msg.blocks);
+  } catch (err) {
+    deleteCalendarEvents_(config, ev);   // 作ったカレンダー予定を残さない
+    throw err;
   }
+  if (!ts) {
+    // 告知が出ないイベントは、誰も参加登録できないのに、主催者には「登録しました」と届いてしまう。
+    // 作ったカレンダー予定を消し、シートにも書かずに差し戻す。シートに無いので、同じ編集用URLから
+    // 再送信すれば新規登録としてやり直せる（既存イベントの編集としては扱われない）
+    console.error('Slackへの告知を投稿できませんでした。登録を取り消します: ' + ev.eventId);
+    deleteCalendarEvents_(config, ev);
+    notifyFormError_(config, formResponse, [
+      'Slackへ告知を投稿できなかったため、登録しませんでした。' +
+      '少し時間をおいて、同じURLからもう一度送信してください。' +
+      '何度やっても同じ場合は、運営にお問い合わせください。']);
+    return;
+  }
+  ev.slackTs = ts;
 
   // 3. スプレッドシートへ記録（管理用・公開用の両方）
-  insertEvent_(config, ev);
+  try {
+    insertEvent_(config, ev);
+  } catch (err) {
+    // 記録できなければ、告知もカレンダー予定も、どこからも管理されないものになる。消して、元に戻す
+    deleteCalendarEvents_(config, ev);
+    deleteMessage_(config, config.slackChannelId, ts);
+    throw err;
+  }
 
   // 4. カレンダー説明欄に概要・参加者確認URL・Slackパーマリンクを書き込み
-  const permalink = ts ? getPermalink_(config, config.slackChannelId, ts) : '';
-  patchCalendarDescriptions_(config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
+  //    （補助的な情報。失敗しても、記録・告知は済んでいるので、主催者へのDMまで進める）
+  const permalink = getPermalink_(config, config.slackChannelId, ts);
+  tryPatchCalendarDescriptions_(config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
 
   // 5. 主催者へ回答編集用URLをDMで通知
   let dmText =
     ':white_check_mark: イベント「' + ev.title + '」を登録しました。\n' +
     '内容の変更・中止はこちらの回答編集用URLから行ってください:\n' + ev.editUrl;
+  if (ev.vcRoom) {
+    // どの部屋が確保されたかは主催者が最初に知りたい情報なので、編集URLの直後に置く
+    dmText += '\n\n:speaker: 会場VC: *' + ev.vcRoom + '* を確保しました\n' + ev.location;
+  }
   if (calendarResult.htmlLink) {
     // 登録内容がカレンダーへ正しく反映されたか、主催者がその場で確認できるようにする
     dmText += '\n\n:calendar: 登録された予定を確認する:\n' + calendarResult.htmlLink;
@@ -317,20 +704,33 @@ function handleNewEvent_(config, formResponse, answers, isMaster) {
 
 // ==================== 回答編集（変更・中止） ====================
 
-function handleEventEdit_(config, existing, answers) {
+function handleEventEdit_(config, existing, answers, formResponse) {
   const now = new Date();
   const ev = existing;
   // 変更前の日時を控える（時間変更の周知でビフォー/アフターを示すため）
   const prevStart = existing.start;
   const prevEnd = existing.end;
+  // 変更前のVC部屋。取り直しで変わったら参加者へ周知する必要がある
+  const prevRoom = existing.vcRoom;
+  // 変更前の開催形式・場所。変わったら、日時の変更と同じく参加者へ周知する
+  const prevFormat = existing.format;
+  const prevLocation = existing.location;
+  // すでに中止になっていたか。中止済みの再送信で、中止の通知を繰り返さないために使う
+  const wasCancelled = isCancelledStatus_(existing.status);
+  // 中止から「開催」へ戻す編集か。中止の間その部屋は空き扱いになっており、
+  // 他のイベントに取られている可能性があるため、復活時は必ず取り直す
+  const revived = wasCancelled && !isCancelledStatus_(answers.status);
   // 開催時間そのものが変わったか（開催形式の変更は含めない。参加者への時間変更周知の判定に使う）
   const timeChanged =
     existing.start.getTime() !== answers.start.getTime() ||
     existing.end.getTime() !== answers.end.getTime();
-  // 日時・開催形式が変わった場合はカレンダー予定の作り直しが必要（分割数が変わり得るため）
+  // 日時・開催形式が変わった場合はカレンダー予定の作り直しが必要（分割数が変わり得るため）。
+  // 中止から開催に戻す場合も、必ず作り直す。中止のときにカレンダー予定を削除しているので、
+  // 日時が同じでも、既存の予定を「更新」することはできない
   const scheduleChanged =
     timeChanged ||
-    existing.format !== answers.format;
+    existing.format !== answers.format ||
+    revived;
   ev.title = answers.title;
   ev.organizer = answers.organizer;
   ev.start = answers.start;
@@ -341,15 +741,44 @@ function handleEventEdit_(config, existing, answers) {
   ev.description = answers.description;
   ev.preparation = answers.preparation;
   ev.updatedAt = now;
-  // Meet自動発行の場合は既存のMeet URLを維持、それ以外はフォーム入力値を採用
-  if (!isAutoMeet_(ev.format)) {
+  // Meet自動発行とDiscord VCは会場URLをシステムが持つので、フォーム入力値で上書きしない。
+  // ここを素通しにすると、主催者が会場欄を空にしたまま再送信しただけでURLが消える
+  if (!isAutoMeet_(ev.format) && !isDiscordVc_(ev.format)) {
     ev.location = answers.location;
   }
 
   if (isCancelledStatus_(ev.status)) {
-    cancelEvent_(config, ev);
+    // 中止すると vcRoomsInUse_ の対象から外れるので、部屋は自動的に空く。
+    // シートには部屋名を残す（中止の告知に会場を出したままにするため）。
+    // 「開催」へ戻す編集は上の revived で必ず取り直すので、空いた部屋を
+    // 持ったまま復活することはない
+    cancelEvent_(config, ev, wasCancelled);
     return;
   }
+
+  // ---- Discord VCの部屋の取り直し ----
+  // 取り直すのは、日時か開催形式が変わったとき・部屋を指名し直したとき・
+  // 中止から復活したとき・まだ部屋を持っていないとき（他形式からの切り替え）だけ。
+  // 変わっていないのに取り直すと、同じ部屋を取り戻せる保証がなく
+  // 「イベント名を直しただけで部屋が変わった」が起こりうる
+  if (isDiscordVc_(ev.format)) {
+    const namedDifferentRoom = answers.vcRoom &&
+      answers.vcRoom !== VC_ROOM_AUTO && answers.vcRoom !== ev.vcRoom;
+    if (scheduleChanged || namedDifferentRoom || revived || !ev.vcRoom) {
+      const assigned = assignVcRoom_(config, ev, answers.vcRoom);
+      if (!assigned.room) {
+        // 何も更新せずに差し戻す。イベントは変更前の日時・部屋のまま残る
+        notifyFormError_(config, formResponse, assigned.errors);
+        return;
+      }
+      ev.vcRoom = assigned.room.name;
+      ev.location = assigned.room.url;
+    }
+  } else if (ev.vcRoom) {
+    // Discord以外へ切り替えたら部屋を手放す（押さえたままにしない）
+    ev.vcRoom = '';
+  }
+  const roomChanged = ev.vcRoom !== prevRoom;
 
   // ---- ステータス「開催」のままの内容変更：一括更新 ----
   const participantsUrl = buildParticipantsPageUrl_(config, ev.eventId);
@@ -357,8 +786,12 @@ function handleEventEdit_(config, existing, answers) {
 
   // カレンダー更新（日時・形式変更時は作り直し。ev の calendarEventId / location が更新される）
   updateCalendarEvents_(config, ev, scheduleChanged);
-  patchCalendarDescriptions_(config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
+  // 予定のIDを、すぐにシートへ記録する。作り直した予定のIDを記録する前に止まると、
+  // カレンダーに、どこからも管理されない予定が残る（説明欄の更新で止まった不具合の原因）
   updateEvent_(config, ev);
+  // 説明欄は補助的な情報なので、失敗しても、告知の再描画・通知まで進める
+  const descriptionUpdated = tryPatchCalendarDescriptions_(
+    config, ev, buildCalendarDescription_(ev, participantsUrl, permalink));
   // 定員増加時：空いた枠の分だけキャンセル待ちを先着順で自動繰り上げ（本人へDM通知）
   promoteWaitlistedUpToCapacity_(config, ev);
   refreshAnnouncement_(config, ev);
@@ -366,12 +799,22 @@ function handleEventEdit_(config, existing, answers) {
   // ボタン処理側の「現在人数 >= 定員」判定で自動的にキャンセル待ちへ回る。
 
   // 開催時間が変わった場合は、告知スレッドと参加者DMで能動的に周知する
-  // （Slackはメッセージ編集ではプッシュ通知を出さず、告知の再描画だけでは参加者が気づけないため）
-  if (timeChanged) {
-    notifyScheduleChange_(config, ev, prevStart, prevEnd);
+  // （Slackはメッセージ編集ではプッシュ通知を出さず、告知の再描画だけでは参加者が気づけないため）。
+  // 中止から開催に戻した場合は、変更前の日時（中止になったもの）を伝える意味が無いので、
+  // いまの日時・会場を伝える再開の通知にまとめる
+  if (revived) {
+    notifyRevived_(config, ev);
+  } else {
+    // 日時・会場VC・開催形式・場所のどれも変わっていなければ、何もしない（関数の中で判定する）
+    notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom, prevFormat, prevLocation);
   }
 
-  let dmText = ':pencil2: イベント「' + ev.title + '」の内容を更新しました。';
+  let dmText = revived
+    ? ':arrows_counterclockwise: イベント「' + ev.title + '」を、中止から開催に戻しました。カレンダー予定は作り直しています。'
+    : ':pencil2: イベント「' + ev.title + '」の内容を更新しました。';
+  if (!descriptionUpdated) {
+    dmText += '\n:warning: カレンダー予定の説明欄だけ更新できませんでした（予定と告知は更新済みです）。';
+  }
   if (scheduleChanged && isAutoMeet_(ev.format)) {
     dmText += '\n:bulb: 日時・開催形式の変更に伴い、Meet URLが再発行されています。最新のURLはSlack告知メッセージをご確認ください。';
   }
@@ -382,49 +825,125 @@ function handleEventEdit_(config, existing, answers) {
   sendDirectMessage_(config, ev.organizer, dmText);
 }
 
-/**
- * 開催時間の変更を、告知スレッドへの投稿と参加者・キャンセル待ちへのDMで周知する。
- * @param {Object} config 設定
- * @param {Object} ev 変更後のイベント（ev.start / ev.end は更新済み）
- * @param {Date} prevStart 変更前の開始日時
- * @param {Date} prevEnd 変更前の終了日時
- */
-function notifyScheduleChange_(config, ev, prevStart, prevEnd) {
-  const before = formatDateRange_(prevStart, prevEnd);
-  const after = formatDateRange_(ev.start, ev.end);
-
-  // 1. 告知スレッドへお知らせを投稿（フォロワー全体にプッシュ通知が飛ぶ）
-  if (ev.slackTs) {
-    postMessage_(
-      config, ev.slackChannel,
-      ':alarm_clock: イベント「' + ev.title + '」の開催日時が変更されました。\n' +
-      '• 変更前: ' + before + '\n' +
-      '• 変更後: ' + after + '\n' +
-      '参加登録済みの方へは個別にDMでもお知らせしています。',
-      ev.slackTs
-    );
-  }
-
-  // 2. 参加者・キャンセル待ちの各人へDM（時間変更は双方に影響するため両方へ送る）
-  // DMは告知チャンネルと別の場所に届くため、告知メッセージへのリンクを添えて
-  // どのイベントかをすぐ辿れるようにする（同名の連続講座がある場合の取り違え防止）。
-  const permalink = ev.slackTs ? getPermalink_(config, ev.slackChannel, ev.slackTs) : '';
-  const linkLine = permalink ? '\n▶ 告知を見る: ' + permalink : '';
-  listParticipants_(config, ev.eventId).forEach(function (p) {
-    const suffix = p.status === PSTATUS.WAITLIST ? '（現在キャンセル待ちで登録中です）' : '';
-    sendDirectMessage_(
-      config, p.userId,
-      ':alarm_clock: 参加登録中のイベント「' + ev.title + '」の開催日時が変更されました。' + suffix + '\n' +
-      '• 変更前: ' + before + '\n' +
-      '• 変更後: ' + after + '\n' +
-      'ご都合が合わなくなった場合は、告知メッセージの「取り消す」ボタンからキャンセルできます。' +
-      linkLine
-    );
-  });
+/** 通知に載せる「場所」の表示。Meet はURLが長く複数あるので「Google Meet」とする */
+function placeLabel_(format, location) {
+  if (isAutoMeet_(format)) return 'Google Meet';
+  const text = String(location || '').trim();
+  if (!text) return '（未定）';
+  return text.length > 200 ? text.slice(0, 200) + '…' : text;
 }
 
-/** イベント中止処理：カレンダー削除（分割予定を含む全件）・シート更新・Slack告知へ【中止】追記 */
-function cancelEvent_(config, ev) {
+/**
+ * 開催時間・会場VC・開催形式・場所の変更を、告知スレッドへの投稿で、参加登録中・キャンセル待ちの
+ * 全員（運営を含む）へメンションして周知する（個別のDMは送らない）。
+ *
+ * 会場VCの変更も同じ強度で伝えるのは、時間の変更とまったく同じ理由による。
+ * Slackはメッセージの編集では通知も未読も出さないため、告知を再描画しただけでは
+ * 「いつもの部屋」に集まってしまう人が出る。黙って部屋が変わるのが一番まずい。
+ *
+ * @param {Object} config 設定
+ * @param {Object} ev 変更後のイベント（start / end / vcRoom は更新済み）
+ * @param {Date} prevStart 変更前の開始日時
+ * @param {Date} prevEnd 変更前の終了日時
+ * @param {string} prevRoom 変更前のVC部屋名（無ければ空文字）
+ */
+function notifyScheduleChange_(config, ev, prevStart, prevEnd, prevRoom, prevFormat, prevLocation) {
+  const timeChanged = prevStart.getTime() !== ev.start.getTime() ||
+    prevEnd.getTime() !== ev.end.getTime();
+  const roomChanged = String(prevRoom || '') !== String(ev.vcRoom || '');
+  const formatChanged = prevFormat !== undefined && String(prevFormat || '') !== String(ev.format || '');
+  // 場所の入力（URL・住所）そのものが変わったか。Meet とDiscord VC は、システムが場所を持つので対象外
+  // （Meet は再発行されるたびに変わるが、それは日時・開催形式の変更として伝える。VCは会場VCの変更として伝える）
+  const placeChanged = prevLocation !== undefined && !isAutoMeet_(ev.format) && !isDiscordVc_(ev.format) &&
+    String(prevLocation || '') !== String(ev.location || '');
+  if (!timeChanged && !roomChanged && !formatChanged && !placeChanged) return;
+
+  const lines = [];
+  if (timeChanged) {
+    lines.push('• 日時（変更前）: ' + formatDateRange_(prevStart, prevEnd));
+    lines.push('• 日時（変更後）: ' + formatDateRange_(ev.start, ev.end));
+  }
+  if (roomChanged) {
+    lines.push('• 会場VC（変更前）: ' + (prevRoom || '（なし）'));
+    lines.push('• 会場VC（変更後）: ' + (ev.vcRoom || '（なし）'));
+  }
+  if (formatChanged) {
+    lines.push('• 開催形式（変更前）: ' + (prevFormat || '（なし）'));
+    lines.push('• 開催形式（変更後）: ' + (ev.format || '（なし）'));
+  }
+  // 場所は、Discord VC が関わるときは会場VCの行で伝わるので、並べない
+  if ((formatChanged || placeChanged) && !isDiscordVc_(prevFormat) && !isDiscordVc_(ev.format)) {
+    lines.push('• 場所（変更前）: ' + placeLabel_(prevFormat, prevLocation));
+    lines.push('• 場所（変更後）: ' + placeLabel_(ev.format, ev.location));
+  }
+  // Meet は、日時・開催形式が変わるたびに URL が再発行される。URLそのものは長く複数あるので、告知を案内する
+  if (isAutoMeet_(ev.format) && (timeChanged || formatChanged)) {
+    lines.push('• Meet の URL は新しく発行されています。最新の URL は、告知メッセージをご確認ください。');
+  }
+  const detail = lines.join('\n');
+  const items = [];
+  if (timeChanged) items.push('開催日時');
+  if (formatChanged) items.push('開催形式');
+  if (roomChanged || placeChanged || (formatChanged && !isDiscordVc_(prevFormat) && !isDiscordVc_(ev.format))) {
+    items.push('会場');
+  }
+  const headline = items.join('・') + 'が変更されました';
+
+  // 告知スレッドへ、参加登録中・キャンセル待ちの全員（運営を含む）へのメンション付きで知らせる。
+  // 中止・再開と同じ方式に統一している。ボタンを押しただけの人はスレッドを購読していないので、
+  // メンションしないと通知が届かない。DMを1人ずつ送ると、人数が多いときに送信の回数制限で、
+  // 一部の人に届かないことがあるが、スレッドへの投稿は1回で済む
+  if (!ev.slackTs) {
+    console.warn('告知メッセージが無いため、変更を参加者へ通知できません: ' + ev.eventId);
+    return;
+  }
+  postMessage_(
+    config, ev.slackChannel,
+    ':alarm_clock: イベント「' + ev.title + '」の' + headline + '。\n' +
+    detail + '\n' +
+    'ご都合が合わなくなった場合は、告知メッセージの「取り消す」ボタンからキャンセルできます。' +
+    buildParticipantMentions_(listParticipants_(config, ev.eventId)),
+    ev.slackTs
+  );
+}
+
+/**
+ * 中止から開催に戻したことを、告知スレッドへの投稿で、参加登録中・キャンセル待ちの全員（運営を含む）へ
+ * メンションして知らせる。中止のときと同じ理由（ボタンを押しただけの人はスレッドを購読していない）で、
+ * メンションしないと通知が届かない。参加登録は、中止の間も残っている。
+ */
+function notifyRevived_(config, ev) {
+  if (!ev.slackTs) return;
+  const lines = [
+    ':arrows_counterclockwise: イベント「' + ev.title + '」は、中止から開催に戻りました。',
+    '日時: ' + formatDateRange_(ev.start, ev.end)
+  ];
+  if (ev.vcRoom) lines.push('会場VC: ' + ev.vcRoom);
+  lines.push('参加登録は、そのまま残っています。');
+  postMessage_(
+    config, ev.slackChannel,
+    lines.join('\n') + buildParticipantMentions_(listParticipants_(config, ev.eventId)),
+    ev.slackTs
+  );
+}
+
+/**
+ * イベント中止処理：カレンダー削除（分割予定を含む全件）・シート更新・Slack告知へ【中止】追記。
+ * 告知スレッドの投稿では、参加登録中・キャンセル待ちの人をメンションする。
+ * ボタンを押しただけの人はスレッドを購読していないので、メンションしないと通知が届かない。
+ * @param {boolean} wasCancelled すでに中止だったか。そうなら、シートと告知の更新だけ行い、
+ *   カレンダー削除・中止の投稿・主催者へのDMは繰り返さない
+ */
+function cancelEvent_(config, ev, wasCancelled) {
+  if (wasCancelled) {
+    updateEvent_(config, ev);
+    if (ev.slackTs) refreshAnnouncement_(config, ev);
+    return;
+  }
+
+  // 中止にした時点の参加者を、カレンダー削除などより前に控えておく
+  const participants = listParticipants_(config, ev.eventId);
+
   deleteCalendarEvents_(config, ev);
   updateEvent_(config, ev); // ステータス「中止」を記録 → 以降のスタンプ検知はスキップされる
 
@@ -433,7 +952,7 @@ function cancelEvent_(config, ev) {
     refreshAnnouncement_(config, ev);
     postMessage_(
       config, ev.slackChannel,
-      ':no_entry: イベント「' + ev.title + '」は中止になりました。',
+      ':no_entry: イベント「' + ev.title + '」は中止になりました。' + buildParticipantMentions_(participants),
       ev.slackTs
     );
   }
@@ -442,5 +961,20 @@ function cancelEvent_(config, ev) {
     config, ev.organizer,
     ':no_entry: イベント「' + ev.title + '」を中止として処理しました（カレンダー削除・告知更新済み）。'
   );
+}
+
+/**
+ * 中止・再開の投稿に付ける、参加者へのメンション（改行から始まる文字列。誰もいなければ空文字）。
+ * 運営として参加した人は「参加登録」に含める。
+ * @param {Array} participants listParticipants_ の結果
+ */
+function buildParticipantMentions_(participants) {
+  const mention = function (p) { return '<@' + p.userId + '>'; };
+  const joined = participants.filter(function (p) { return p.status !== PSTATUS.WAITLIST; });
+  const waiting = participants.filter(function (p) { return p.status === PSTATUS.WAITLIST; });
+  let text = '';
+  if (joined.length > 0) text += '\n参加登録: ' + joined.map(mention).join(' ');
+  if (waiting.length > 0) text += '\nキャンセル待ち: ' + waiting.map(mention).join(' ');
+  return text;
 }
 

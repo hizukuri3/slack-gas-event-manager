@@ -18,14 +18,19 @@
 function handleSlashCommand_(params) {
   const config = getConfig_();
 
-  // 簡易検証：Verification Token の照合（設定されている場合のみ）
-  if (config.slackVerificationToken && params.token !== config.slackVerificationToken) {
+  // 簡易検証：Verification Token の照合（getConfig_ が必須にしているので常に行う）
+  if (params.token !== config.slackVerificationToken) {
     return slashResponse_(':warning: 検証に失敗しました。');
   }
 
+  // ナイスチャレンジ用のコマンドは、専用のフォームURLを返す
+  if (params.command === VIZ_SLASH_COMMAND) return handleVizSlashCommand_(params);
+
   const userId = params.user_id;
 
-  // 師匠には師匠用フォームのリンクのみを返す（弟子には非公開）
+  // 師匠には師匠用フォームのリンクのみを返す（弟子には非公開）。
+  // 誰が師匠かは「師匠リスト」シート（管理用①）で管理する。config.masterUserIds は
+  // そこから自動生成されたキャッシュで、ここでは追加の通信なしで参照できる（MasterList.gs 参照）
   const isMaster = config.masterUserIds.indexOf(userId) !== -1;
   if (isMaster && config.masterFormId) {
     const masterUrl = buildPrefilledFormUrl_(
@@ -42,6 +47,32 @@ function handleSlashCommand_(params) {
     ':spiral_note_pad: *イベント登録フォーム（あなた専用リンク）*\n' +
     '主催者のSlackユーザーID（<@' + userId + '>）は入力済みです。そのまま残りの項目を入力してください。\n' +
     generalUrl);
+}
+
+/**
+ * ナイスチャレンジのスラッシュコマンド。コマンドを打った本人のIDを
+ * 「投稿者のSlackユーザーID」に入れたフォームのURLを返す。
+ * フォームIDとエントリIDはスクリプトプロパティの写しを使う（FormApp・シートは応答経路で使わない。
+ * 写しは refreshVizPrefill_ が作る）。
+ */
+function handleVizSlashCommand_(params) {
+  const props = PropertiesService.getScriptProperties();
+  const formId = props.getProperty(VIZ_PROP_FORM_ID);
+  if (!formId) {
+    return slashResponse_(':warning: ナイスチャレンジのフォームがまだ設定されていません。運営へ連絡してください。');
+  }
+  const entryId = String(props.getProperty(VIZ_PROP_ENTRY_AUTHOR) || '').replace(/^entry\./, '');
+  const base = 'https://docs.google.com/forms/d/' + formId + '/viewform';
+  if (!/^\d+$/.test(entryId)) {
+    return slashResponse_(
+      ':bar_chart: *ナイスチャレンジのフォーム*\n' +
+      '投稿者のSlackユーザーIDは自動では入りません。Slackのプロフィール →「︙」→「メンバーIDをコピー」で調べて入力してください。\n' +
+      base);
+  }
+  return slashResponse_(
+    ':bar_chart: *ナイスチャレンジのフォーム（あなた専用リンク）*\n' +
+    '投稿者のSlackユーザーID（<@' + params.user_id + '>）は入力済みです。そのまま残りの項目を入力してください。\n' +
+    base + '?usp=pp_url&entry.' + entryId + '=' + encodeURIComponent(params.user_id));
 }
 
 /** スラッシュコマンドへの応答（本人にのみ表示） */
@@ -139,7 +170,7 @@ function extractPrefillEntryIds_(formId) {
     }
 
     if (title === FORM_TITLES.STATUS && item.getType() === FormApp.ItemType.MULTIPLE_CHOICE) {
-      // 「中止」を含まない選択肢（=①開催）を事前入力の対象にする
+      // 「中止」を含まない選択肢（=「開催」）を事前入力の対象にする
       const mcItem = item.asMultipleChoiceItem();
       const openChoice = mcItem.getChoices().find(function (choice) {
         return choice.getValue().indexOf('中止') === -1;

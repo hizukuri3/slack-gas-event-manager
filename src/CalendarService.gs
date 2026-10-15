@@ -1,7 +1,7 @@
 /**
  * CalendarService.gs
  * Googleカレンダー連携（Calendar API 拡張サービス使用）。
- * 開催形式「オンライン・自動発行」の場合は conferenceData で Google Meet URL を自動生成する。
+ * 開催形式「Google Meet」の場合は conferenceData で Google Meet URL を自動生成する。
  *
  * 無料版Google Meetは3人以上の通話が60分で自動切断されるため、
  * 自動発行かつ60分超のイベントはカレンダー予定を60分ごとに分割登録する。
@@ -13,9 +13,41 @@
 
 const MEET_FREE_LIMIT_MINUTES = 60;
 
-/** 開催形式がMeet自動発行かどうか */
+// カレンダーAPIは、短い時間に続けて書き込むと「Rate Limit Exceeded」で失敗することがある
+// （予定の削除・作成・説明欄の更新を続けて行う更新で起きた）。一時的な失敗なので、
+// 少し待ってやり直す。待ち時間は1回目・2回目・3回目の再試行ぶん
+const CALENDAR_RETRY_WAITS_MS = [1000, 2000, 4000];
+
+/** 回数制限による一時的なエラーか（やり直せば通る）。作成の二重実行を避けるため、これ以外は再試行しない */
+function isCalendarRateLimitError_(err) {
+  return /rate limit exceeded|rateLimitExceeded|userRateLimitExceeded|usage limits exceeded|quota exceeded/i
+    .test(String((err && err.message) || err));
+}
+
+/** 予定が存在しない（手で消された・中止で削除済み）ときのエラーか */
+function isCalendarMissingError_(err) {
+  return /resource has been deleted|not found|notFound|\b(404|410)\b/i.test(String((err && err.message) || err));
+}
+
+/**
+ * カレンダーAPIの呼び出しを、回数制限のときだけ再試行して実行する。
+ * それ以外のエラーは、すぐに投げ直す。
+ */
+function withCalendarRetry_(fn) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fn();
+    } catch (err) {
+      if (attempt >= CALENDAR_RETRY_WAITS_MS.length || !isCalendarRateLimitError_(err)) throw err;
+      console.warn('カレンダーの呼び出しを再試行します（' + (attempt + 1) + '回目）: ' + err);
+      Utilities.sleep(CALENDAR_RETRY_WAITS_MS[attempt]);
+    }
+  }
+}
+
+/** 開催形式がMeet自動発行かどうか（EVENT_FORMATS の値と完全一致で判定する） */
 function isAutoMeet_(format) {
-  return String(format).indexOf('自動発行') !== -1;
+  return String(format).trim() === EVENT_FORMATS.MEET;
 }
 
 /** 自動発行Meetで60分を超え、予定の分割が必要かどうか */
@@ -89,11 +121,13 @@ function createCalendarEvents_(config, ev) {
       };
       options.conferenceDataVersion = 1;
     } else {
-      // 手動URL・オフラインは入力テキストをそのまま「場所」欄へ格納（分割もしない）
+      // その他のオンライン・対面は入力テキストをそのまま「場所」欄へ格納（分割もしない）
       resource.location = ev.location;
     }
 
-    const created = Calendar.Events.insert(resource, config.calendarId, options);
+    const created = withCalendarRetry_(function () {
+      return Calendar.Events.insert(resource, config.calendarId, options);
+    });
     ids.push(created.id);
     if (isAutoMeet_(ev.format)) {
       meetUrls.push(created.hangoutLink || '');
@@ -135,24 +169,36 @@ function meetScheduleLines_(ev) {
  * @return {Object} ev（calendarEventId / location を更新して返す）
  */
 function updateCalendarEvents_(config, ev, scheduleChanged) {
-  if (scheduleChanged) {
-    deleteCalendarEvents_(config, ev);
-    const result = createCalendarEvents_(config, ev);
-    ev.calendarEventId = result.calendarEventIds.join(',');
-    if (isAutoMeet_(ev.format) && result.meetUrls.length) {
-      ev.location = result.meetUrls.join(',');
-    }
-    return ev;
-  }
+  if (scheduleChanged) return recreateCalendarEvents_(config, ev);
 
   const ids = calendarEventIds_(ev);
-  ids.forEach(function (id, i) {
-    const resource = { summary: ev.title + segmentLabel_(i, ids.length) };
-    if (!isAutoMeet_(ev.format)) {
-      resource.location = ev.location;
-    }
-    Calendar.Events.patch(resource, config.calendarId, id);
-  });
+  try {
+    ids.forEach(function (id, i) {
+      const resource = { summary: ev.title + segmentLabel_(i, ids.length) };
+      if (!isAutoMeet_(ev.format)) {
+        resource.location = ev.location;
+      }
+      withCalendarRetry_(function () {
+        return Calendar.Events.patch(resource, config.calendarId, id);
+      });
+    });
+  } catch (err) {
+    // カレンダー側で予定が消されている（手で消された・中止で削除済みなど）ときは、作り直す
+    if (!isCalendarMissingError_(err)) throw err;
+    console.warn('カレンダー予定が存在しないため、作り直します: ' + err);
+    return recreateCalendarEvents_(config, ev);
+  }
+  return ev;
+}
+
+/** 既存の予定をすべて削除して、作り直す。ev の calendarEventId / location を更新して返す */
+function recreateCalendarEvents_(config, ev) {
+  deleteCalendarEvents_(config, ev);
+  const result = createCalendarEvents_(config, ev);
+  ev.calendarEventId = result.calendarEventIds.join(',');
+  if (isAutoMeet_(ev.format) && result.meetUrls.length) {
+    ev.location = result.meetUrls.join(',');
+  }
   return ev;
 }
 
@@ -187,15 +233,33 @@ function buildCalendarDescription_(ev, participantsUrl, slackPermalink) {
 /** 全予定の説明欄を書き込む */
 function patchCalendarDescriptions_(config, ev, description) {
   calendarEventIds_(ev).forEach(function (id) {
-    Calendar.Events.patch({ description: description }, config.calendarId, id);
+    withCalendarRetry_(function () {
+      return Calendar.Events.patch({ description: description }, config.calendarId, id);
+    });
   });
+}
+
+/**
+ * 説明欄の更新。説明欄は補助的な情報なので、失敗しても呼び出し側の処理（記録・告知・通知）を
+ * 止めない。成功したかを返す。
+ */
+function tryPatchCalendarDescriptions_(config, ev, description) {
+  try {
+    patchCalendarDescriptions_(config, ev, description);
+    return true;
+  } catch (err) {
+    console.warn('カレンダーの説明欄を更新できませんでした（予定は更新済みです）: ' + err);
+    return false;
+  }
 }
 
 /** カレンダー予定をすべて削除する（イベント中止・作り直し時） */
 function deleteCalendarEvents_(config, ev) {
   calendarEventIds_(ev).forEach(function (id) {
     try {
-      Calendar.Events.remove(config.calendarId, id);
+      withCalendarRetry_(function () {
+        return Calendar.Events.remove(config.calendarId, id);
+      });
     } catch (err) {
       // 既に削除済みの場合などは無視して処理を続行
       console.warn('カレンダー予定の削除に失敗: ' + err);

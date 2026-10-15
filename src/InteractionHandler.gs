@@ -53,8 +53,8 @@ function handleInteraction_(payload) {
 
   const config = getConfig_();
 
-  // 簡易検証：Verification Token の照合（設定されている場合のみ）
-  if (config.slackVerificationToken && payload.token !== config.slackVerificationToken) {
+  // 簡易検証：Verification Token の照合（getConfig_ が必須にしているので常に行う）
+  if (payload.token !== config.slackVerificationToken) {
     return;
   }
 
@@ -174,12 +174,16 @@ function handleJoin_(config, ev, userId, displayName) {
   const participants = listParticipants_(config, ev.eventId);
   const mine = participants.find(function (p) { return p.userId === userId; });
   if (mine) {
-    return {
-      changed: false,
-      feedback: mine.status === PSTATUS.JOINED
-        ? ':information_source: すでに参加登録済みです。'
-        : ':information_source: すでにキャンセル待ちに登録済みです。空きが出たら自動で繰り上げてDMでお知らせします。'
-    };
+    let feedback;
+    if (mine.status === PSTATUS.JOINED) {
+      feedback = ':information_source: すでに参加登録済みです。';
+    } else if (mine.status === PSTATUS.STAFF) {
+      // 運営として登録済みの人が「参加する」を押したとき。キャンセル待ちではない
+      feedback = ':information_source: すでに運営として登録済みです。';
+    } else {
+      feedback = ':information_source: すでにキャンセル待ちに登録済みです。空きが出たら自動で繰り上げてDMでお知らせします。';
+    }
+    return { changed: false, feedback: feedback };
   }
 
   const joinedCount = countByStatus_(participants, PSTATUS.JOINED);

@@ -23,30 +23,37 @@ features:
       url: https://script.google.com/macros/s/REPLACE_WITH_EXEC_URL/exec
       description: イベント登録フォームを開く（主催者ID入力済み）
       should_escape: false
+    - command: /review
+      url: https://script.google.com/macros/s/REPLACE_WITH_EXEC_URL/exec
+      description: ナイスチャレンジのフォームを開く（投稿者ID入力済み）
+      should_escape: false
 
 oauth_config:
   scopes:
     bot:
-      - chat:write        # 告知投稿・参加状況のリアルタイム再描画・スレッド通知・絵文字転送
+      - chat:write        # 告知投稿・参加状況のリアルタイム再描画・スレッド通知・絵文字転送・クイズ出題
       - chat:write.public # Botが未参加の転送先チャンネルへ投稿するため
+      - chat:write.customize # クイズ出題時に、クイズ設定シートの表示名・アイコンで投稿するため
+      - files:write       # 画像付きのクイズ問題のアップロード
       - users:read        # 表示名（Display Name）の取得
       - im:write          # 主催者への編集URL通知・繰り上げ確定のDM送信
       - channels:history  # 告知メッセージのパーマリンク取得
       - channels:read     # 転送先チャンネル名 → チャンネルID の解決（conversations.list）
-      - reactions:read    # 絵文字転送。リアクションイベントの受信と reactions.get
-      - commands          # /event スラッシュコマンド用
+      - reactions:read    # 絵文字転送・クイズ回答記録。リアクションイベントの受信と reactions.get
+      - commands          # /event・/review スラッシュコマンド用
 
 settings:
   interactivity:
     is_enabled: true
     request_url: https://script.google.com/macros/s/REPLACE_WITH_EXEC_URL/exec
-  # ボタン押下は Interactivity 経由で届くため、ここは絵文字転送のリアクション用。
+  # ボタン押下は Interactivity 経由で届くため、ここは絵文字転送・クイズ回答記録・ナイスチャレンジのイベント用。
   # 登録時に Slack から url_verification が飛ぶので、先にコードをデプロイしておくこと。
   event_subscriptions:
     request_url: https://script.google.com/macros/s/REPLACE_WITH_EXEC_URL/exec
     bot_events:
       - reaction_added
       - reaction_removed
+      - message.channels  # ナイスチャレンジ：投稿へのスレッド返信の記録（本文は保存しない）
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false
