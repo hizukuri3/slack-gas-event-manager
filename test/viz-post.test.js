@@ -19,8 +19,8 @@ test('ナイスチャレンジの投稿: 見出しと並びは固定で、フォ
   const headings = [...text.matchAll(/^\*(.+)\*$/gm)].map((m) => m[1]);
   assert.deepEqual(headings,
     ['所属部屋', '成果物のリンク', 'FBを受けたい対象', '成果物の状態', '欲しいFB', '相談内容']);
-  assert.ok(text.startsWith('<@U111AAAA> さんがVizのレビューを募集しています :eyes:'));
-  assert.ok(text.endsWith('このスレッドでレビューをお待ちしています :bar_chart:'));
+  assert.ok(text.startsWith('*所属部屋*'), '本文は設問から始まる（見出しと案内は親の投稿）');
+  assert.ok(text.endsWith('<@U222BBBB> <@U333CCCC> レビューをお願いします :pray:'));
   assert.ok(text.includes('a?b=1&amp;c=2'), '特殊文字はエスケープされる');
 });
 
@@ -38,7 +38,6 @@ test('ナイスチャレンジの投稿: 空の設問は載せず、師匠が0�
 
 test('ナイスチャレンジの投稿: 固定の見出しに無い設問は、設問名のまま末尾に載る（消えない）', () => {
   const text = build({ [T.ROOM]: 'A部屋', '新しい設問': '回答です' }, '', ['U222BBBB']);
-  assert.ok(text.startsWith('メンバー さんが'), '投稿者を特定できないときは「メンバー」');
   assert.ok(text.indexOf('*新しい設問*') > 0);
   assert.ok(text.indexOf('*新しい設問*') < text.indexOf('レビューをお願いします'));
 });
@@ -46,4 +45,116 @@ test('ナイスチャレンジの投稿: 固定の見出しに無い設問は、
 test('escapeSlackText_ は1つだけ定義され、null を空文字にする', () => {
   assert.equal(gas.ctx.escapeSlackText_(null), '');
   assert.equal(gas.ctx.escapeSlackText_('<!channel> & x'), '&lt;!channel&gt; &amp; x');
+});
+
+test('ナイスチャレンジの投稿: 親の投稿は見出しと案内だけ', () => {
+  assert.equal(gas.ctx.buildVizParentText_('U111AAAA'),
+    '<@U111AAAA> さんがVizのレビューを募集しています :eyes:\n内容とレビューはスレッドへ :point_down:');
+  assert.ok(gas.ctx.buildVizParentText_('').startsWith('メンバー さんが'), '投稿者を特定できないときは「メンバー」');
+});
+
+test('ナイスチャレンジの投稿: 回答が全部空で師匠もいなくても、本文は空にならない', () => {
+  assert.notEqual(build({}, '', []), '');
+});
+
+test('ナイスチャレンジの投稿: 本文を親に載せていた頃の形は、見出し・本文・末尾の文のまま', () => {
+  const body = build({ [T.ROOM]: 'A部屋' }, 'U111AAAA', ['U222BBBB']);
+  const legacy = gas.ctx.buildVizLegacyPostText_(body, 'U111AAAA');
+  assert.ok(legacy.startsWith('<@U111AAAA> さんがVizのレビューを募集しています :eyes:\n\n*所属部屋*'));
+  assert.ok(legacy.endsWith('\n\nこのスレッドでレビューをお待ちしています :bar_chart:'));
+});
+
+// ---- 投稿の流れ（親 → 本文の返信 → ログ）----
+function flow(postResults) {
+  const g = loadGas();
+  const calls = { posts: [], api: [], dms: [], recorded: [] };
+  const sheet = { getDataRange: () => ({ getValues: () => [[]] }) };
+  g.stub({
+    resolveChannelId_: () => 'C1',
+    getOrCreateSheet_: () => sheet,
+    slackUserExists_: () => true,
+    postVizMessage_: (config, ch, settings, text, threadTs) => {
+      calls.posts.push({ text, threadTs });
+      return postResults.shift();
+    },
+    callSlackApi_: (config, method, payload) => { calls.api.push({ method, payload }); return { ok: true }; },
+    sendDirectMessage_: (config, user, text) => calls.dms.push(user),
+    recordVizPost_: (...args) => { calls.recorded.push(args); return 2; },
+    notifyVizAuthor_: () => {},
+    deleteVizResponse_: () => true
+  });
+  const e = { source: {}, response: {
+    getId: () => 'R1',
+    getItemResponses: () => [
+      { getItem: () => ({ getTitle: () => g.get('VIZ_FORM_TITLES').ROOM }), getResponse: () => 'A部屋' },
+      { getItem: () => ({ getTitle: () => 'author' }), getResponse: () => 'U111AAAA' }
+    ]
+  } };
+  const settings = { channel: '#c', authorQuestion: 'author', retentionDays: 7 };
+  g.ctx.postVizReviewRequest_({ masterUserIds: ['U222BBBB'] }, {}, settings, e);
+  return calls;
+}
+
+test('ナイスチャレンジの投稿の流れ: 親を出し、その返信に本文を載せ、両方のtsをログに残す', () => {
+  const calls = flow(['111.1', '222.2']);
+  assert.equal(calls.posts.length, 2);
+  assert.equal(calls.posts[0].threadTs, undefined);
+  assert.ok(calls.posts[0].text.includes('内容とレビューはスレッドへ'));
+  assert.equal(calls.posts[1].threadTs, '111.1', '本文は親のスレッドへ');
+  assert.ok(calls.posts[1].text.includes('*所属部屋*'));
+  const [, authorId, text, channelId, messageTs, responseId, bodyTs] = calls.recorded[0];
+  assert.deepEqual([authorId, channelId, messageTs, responseId, bodyTs], ['U111AAAA', 'C1', '111.1', 'R1', '222.2']);
+  assert.equal(text, calls.posts[1].text, '投稿内容には本文を残す');
+});
+
+test('ナイスチャレンジの投稿の流れ: 本文の投稿に失敗したら、親を消して本人へ知らせ、ログには残さない', () => {
+  const calls = flow(['111.1', null]);
+  assert.deepEqual(calls.api.map((c) => c.method), ['chat.delete']);
+  assert.equal(calls.api[0].payload.ts, '111.1');
+  assert.deepEqual(calls.dms, ['U111AAAA']);
+  assert.equal(calls.recorded.length, 0);
+});
+
+test('ナイスチャレンジの投稿の流れ: 親の投稿に失敗したら、本文は投稿しない', () => {
+  const calls = flow([null]);
+  assert.equal(calls.posts.length, 1);
+  assert.equal(calls.recorded.length, 0);
+});
+
+// ---- 投稿の検索と回答の編集 ----
+function logSheet(rows) {
+  const g = loadGas();
+  const C = g.get('VIZ_LOG_COL');
+  const values = [[]].concat(rows.map((r) => {
+    const row = [];
+    row[C.AUTHOR] = 'U111AAAA'; row[C.CHANNEL] = 'C1'; row[C.MESSAGE_TS] = r.parent;
+    row[C.RESPONSE_ID] = r.response; row[C.BODY_TS] = r.body;
+    return row;
+  }));
+  return { g, sheet: { getDataRange: () => ({ getValues: () => values }) }, spreadsheet: { getSheetByName: () => ({ getDataRange: () => ({ getValues: () => values }) }) } };
+}
+
+test('投稿の検索: 親のtsでも本文の返信のtsでも見つかり、どちらも親のtsを返す。旧形式の行（本文の返信IDなし）も探せる', () => {
+  const { g, spreadsheet } = logSheet([{ parent: '1.1', body: '1.2', response: 'R1' }, { parent: '2.1', body: undefined, response: 'R2' }]);
+  assert.equal(g.ctx.findVizPostByTs_(spreadsheet, '1.1').messageTs, '1.1');
+  assert.equal(g.ctx.findVizPostByTs_(spreadsheet, '1.2').messageTs, '1.1');
+  assert.equal(g.ctx.findVizPostByTs_(spreadsheet, '2.1').messageTs, '2.1');
+  assert.equal(g.ctx.findVizPostByTs_(spreadsheet, ''), null, '空のtsで旧形式の行に当たらない');
+  assert.equal(g.ctx.findVizPostByTs_(spreadsheet, '9.9'), null);
+});
+
+test('回答の編集: 本文の返信があれば返信を、旧形式の投稿なら親の投稿を書き換える', () => {
+  const g = loadGas();
+  const updates = [];
+  g.stub({ callSlackApi_: (c, m, p) => { updates.push(p); return { ok: true }; } });
+  const log = { getRange: () => ({ setValue() {} }) };
+  const answers = { [g.get('VIZ_FORM_TITLES').ROOM]: 'B部屋' };
+  const base = { rowNumber: 2, author: 'U111AAAA', channel: 'C1', messageTs: '1.1' };
+  g.ctx.updateVizPost_({ masterUserIds: [] }, log, answers, Object.assign({ bodyTs: '1.2' }, base));
+  g.ctx.updateVizPost_({ masterUserIds: [] }, log, answers, Object.assign({ bodyTs: '' }, base));
+  assert.equal(updates[0].ts, '1.2');
+  assert.ok(updates[0].text.startsWith('*所属部屋*'));
+  assert.equal(updates[1].ts, '1.1');
+  assert.ok(updates[1].text.startsWith('<@U111AAAA> さんが'));
+  assert.ok(updates[1].text.endsWith('このスレッドでレビューをお待ちしています :bar_chart:'));
 });
