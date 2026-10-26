@@ -47,10 +47,27 @@ test('escapeSlackText_ は1つだけ定義され、null を空文字にする', 
   assert.equal(gas.ctx.escapeSlackText_('<!channel> & x'), '&lt;!channel&gt; &amp; x');
 });
 
-test('ナイスチャレンジの投稿: 親の投稿は見出しと案内だけ', () => {
-  assert.equal(gas.ctx.buildVizParentText_('U111AAAA'),
-    '<@U111AAAA> さんがVizのレビューを募集しています :eyes:\n内容とレビューはスレッドへ :point_down:');
-  assert.ok(gas.ctx.buildVizParentText_('').startsWith('メンバー さんが'), '投稿者を特定できないときは「メンバー」');
+test('ナイスチャレンジの投稿: 親の投稿は見出し・概要・対象・案内', () => {
+  assert.equal(gas.ctx.buildVizParentText_('U111AAAA', {
+    [T.SUMMARY]: '新人向けの売上ダッシュボードを作りました', [T.TARGET]: '組織内 Viz共有', [T.CONSULT]: '相談です'
+  }), '<@U111AAAA> さんがVizのレビューを募集しています :eyes:\n' +
+    '概要: 新人向けの売上ダッシュボードを作りました\n対象: 組織内 Viz共有\n内容とレビューはスレッドへ :point_down:');
+  assert.ok(gas.ctx.buildVizParentText_('', {}).startsWith('メンバー さんが'), '投稿者を特定できないときは「メンバー」');
+});
+
+test('ナイスチャレンジの投稿: 親の投稿は、回答が無い行を出さず、特殊文字をエスケープする', () => {
+  const text = gas.ctx.buildVizParentText_('U111AAAA', { [T.SUMMARY]: 'A & <B>', [T.TARGET]: '' });
+  assert.ok(text.includes('概要: A &amp; &lt;B&gt;'));
+  assert.ok(!text.includes('対象'));
+  assert.equal(gas.ctx.buildVizParentText_('U111AAAA').split('\n').length, 2, '回答が無ければ見出しと案内だけ');
+});
+
+test('ナイスチャレンジの投稿: 概要は本文の「概要」にも載り、フォームの概要の設問は必須で成果物のリンクの前にある', () => {
+  assert.ok(build({ [T.SUMMARY]: 'ひとこと' }, '', []).startsWith('*概要*\nひとこと'));
+  const spec = gas.ctx.vizFormSpec_();
+  const i = spec.findIndex((x) => x.title === T.SUMMARY);
+  assert.ok(i > 0 && spec[i].required);
+  assert.equal(spec[i + 1].title, T.LINK);
 });
 
 test('ナイスチャレンジの投稿: 回答が全部空で師匠もいなくても、本文は空にならない', () => {
@@ -87,6 +104,7 @@ function flow(postResults) {
     getId: () => 'R1',
     getItemResponses: () => [
       { getItem: () => ({ getTitle: () => g.get('VIZ_FORM_TITLES').ROOM }), getResponse: () => 'A部屋' },
+      { getItem: () => ({ getTitle: () => g.get('VIZ_FORM_TITLES').SUMMARY }), getResponse: () => 'ひとこと' },
       { getItem: () => ({ getTitle: () => 'author' }), getResponse: () => 'U111AAAA' }
     ]
   } };
@@ -100,6 +118,7 @@ test('ナイスチャレンジの投稿の流れ: 親を出し、その返信に
   assert.equal(calls.posts.length, 2);
   assert.equal(calls.posts[0].threadTs, undefined);
   assert.ok(calls.posts[0].text.includes('内容とレビューはスレッドへ'));
+  assert.ok(calls.posts[0].text.includes('概要: ひとこと'), '親に概要が載る');
   assert.equal(calls.posts[1].threadTs, '111.1', '本文は親のスレッドへ');
   assert.ok(calls.posts[1].text.includes('*所属部屋*'));
   const [, authorId, text, channelId, messageTs, responseId, bodyTs] = calls.recorded[0];
@@ -143,18 +162,25 @@ test('投稿の検索: 親のtsでも本文の返信のtsでも見つかり、�
   assert.equal(g.ctx.findVizPostByTs_(spreadsheet, '9.9'), null);
 });
 
-test('回答の編集: 本文の返信があれば返信を、旧形式の投稿なら親の投稿を書き換える', () => {
+test('回答の編集: 本文の返信があれば返信と親の見出しを、旧形式の投稿なら親の投稿だけを書き換える', () => {
   const g = loadGas();
   const updates = [];
   g.stub({ callSlackApi_: (c, m, p) => { updates.push(p); return { ok: true }; } });
   const log = { getRange: () => ({ setValue() {} }) };
-  const answers = { [g.get('VIZ_FORM_TITLES').ROOM]: 'B部屋' };
+  const T2 = g.get('VIZ_FORM_TITLES');
+  const answers = { [T2.ROOM]: 'B部屋', [T2.SUMMARY]: '直した概要' };
   const base = { rowNumber: 2, author: 'U111AAAA', channel: 'C1', messageTs: '1.1' };
   g.ctx.updateVizPost_({ masterUserIds: [] }, log, answers, Object.assign({ bodyTs: '1.2' }, base));
-  g.ctx.updateVizPost_({ masterUserIds: [] }, log, answers, Object.assign({ bodyTs: '' }, base));
+  assert.equal(updates.length, 2);
   assert.equal(updates[0].ts, '1.2');
   assert.ok(updates[0].text.startsWith('*所属部屋*'));
-  assert.equal(updates[1].ts, '1.1');
-  assert.ok(updates[1].text.startsWith('<@U111AAAA> さんが'));
-  assert.ok(updates[1].text.endsWith('このスレッドでレビューをお待ちしています :bar_chart:'));
+  assert.equal(updates[1].ts, '1.1', '親の見出しも直す');
+  assert.ok(updates[1].text.includes('概要: 直した概要'));
+
+  updates.length = 0;
+  g.ctx.updateVizPost_({ masterUserIds: [] }, log, answers, Object.assign({ bodyTs: '' }, base));
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].ts, '1.1');
+  assert.ok(updates[0].text.startsWith('<@U111AAAA> さんが'));
+  assert.ok(updates[0].text.endsWith('このスレッドでレビューをお待ちしています :bar_chart:'));
 });

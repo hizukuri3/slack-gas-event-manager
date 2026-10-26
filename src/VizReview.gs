@@ -107,7 +107,7 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
   // スレッドが最初から立ち、レビューの書き込み先が分かる。
   // 師匠は常に全員。メンション先は「師匠リスト」の有効な人（getConfig_ が読むプロパティの写し）
   const text = buildVizPostText_(answers, authorId, config.masterUserIds);
-  const messageTs = postVizMessage_(config, channelId, settings, buildVizParentText_(authorId));
+  const messageTs = postVizMessage_(config, channelId, settings, buildVizParentText_(authorId, answers));
   if (!messageTs) {
     console.error('ナイスチャレンジの投稿に失敗しました（回答は削除していません）: ' + responseId);
     if (authorId) {
@@ -171,15 +171,35 @@ function updateVizPost_(config, logSheet, answers, posted) {
     return;
   }
   logSheet.getRange(posted.rowNumber, VIZ_LOG_COL.TEXT + 1).setValue(truncateForLog_(body));
+
+  // 親の投稿にも概要と対象を載せているので、そちらも直す（旧形式の投稿は、上で親を書き換え済み）
+  if (!posted.bodyTs) return;
+  const parent = callSlackApi_(config, 'chat.update', {
+    channel: posted.channel, ts: posted.messageTs, text: buildVizParentText_(authorId, answers)
+  });
+  if (!parent.ok) {
+    console.error('ナイスチャレンジの親の投稿を更新できませんでした: ' + parent.error);
+    if (authorId) {
+      sendDirectMessage_(config, authorId,
+        ':warning: 回答の修正を投稿の見出しに反映できませんでした。運営へ連絡してください。');
+    }
+  }
 }
 
 /**
- * 親の投稿の本文。見出しと、内容はスレッドにある旨の案内だけ
+ * 親の投稿の本文。見出し・概要と対象（VIZ_PARENT_FIELDS。回答があるものだけ）・内容はスレッドにある旨の案内
  * @param {string} authorId 投稿者のSlackユーザーID（特定できなければ空文字）
+ * @param {Object} answers 設問名 → 回答
  */
-function buildVizParentText_(authorId) {
+function buildVizParentText_(authorId, answers) {
   const author = authorId ? '<@' + authorId + '>' : 'メンバー';
-  return VIZ_POST_HEADER.split('{author}').join(author) + '\n' + VIZ_POST_THREAD_LINE;
+  const lines = [VIZ_POST_HEADER.split('{author}').join(author)];
+  VIZ_PARENT_FIELDS.forEach(function (field) {
+    const answer = answers && answers[field.question];
+    if (answer) lines.push(field.label + ': ' + escapeSlackText_(answer));
+  });
+  lines.push(VIZ_POST_THREAD_LINE);
+  return lines.join('\n');
 }
 
 /**
@@ -919,6 +939,8 @@ function vizFormSpec_() {
       help: 'あなたの所属する部屋を選択してください。投稿は師匠にもメンションされます。',
       choices: ['（「' + SHEET_MASTER_LIST + '」シートに師匠の表示名を入れてください）'] },
     { title: VIZ_FORM_TITLES.SECTION, type: 'PAGE_BREAK' },
+    { title: VIZ_FORM_TITLES.SUMMARY, type: 'TEXT', required: true,
+      help: '（記入例）新人向けの売上ダッシュボードを作りました。チャンネルの投稿に載ります。' },
     { title: VIZ_FORM_TITLES.LINK, type: 'TEXT', required: true },
     { title: VIZ_FORM_TITLES.TARGET, type: 'LIST', required: true, choices: [
       'パブリック Tableau PublicへのViz投稿',

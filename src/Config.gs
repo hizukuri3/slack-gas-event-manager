@@ -248,6 +248,7 @@ const VIZ_FORM_TITLES = {
   AUTHOR: '投稿者のSlackユーザーID',
   ROOM: '所属部屋',
   SECTION: 'フィードバックを受けたい内容の記載',
+  SUMMARY: '活動の概要をひとことで！（※必須）',
   LINK: '成果物のリンクなどを記載してください（※必須）',
   TARGET: 'FB（フィードバック）を受けたい対象は？（※必須）',
   STATE: '成果物はどんな状態ですか？（※必須）',
@@ -260,6 +261,7 @@ const VIZ_FORM_TITLES = {
 // 設問名はフォームの設問と完全一致で結びつく。ここに無い設問は、回答があれば設問名のまま末尾に足される
 const VIZ_POST_FIELDS = [
   { question: VIZ_FORM_TITLES.ROOM, label: '所属部屋' },
+  { question: VIZ_FORM_TITLES.SUMMARY, label: '概要' },
   { question: VIZ_FORM_TITLES.LINK, label: '成果物のリンク' },
   { question: VIZ_FORM_TITLES.TARGET, label: 'FBを受けたい対象' },
   { question: VIZ_FORM_TITLES.STATE, label: '成果物の状態' },
@@ -270,6 +272,11 @@ const VIZ_POST_FIELDS = [
 // 親の投稿は見出しと案内だけにして、回答の内容と師匠へのメンションはその返信（本文）に載せる。
 // こうすると投稿に必ず返信が付き、レビューの書き込み先がスレッドだと最初から分かる
 const VIZ_POST_HEADER = '{author} さんがVizのレビューを募集しています :eyes:';
+// 親の投稿に載せる回答（チャンネルの流れだけで、何の活動か分かるように）。回答が空・設問がフォームに無ければ、その行は出ない
+const VIZ_PARENT_FIELDS = [
+  { question: VIZ_FORM_TITLES.SUMMARY, label: '概要' },
+  { question: VIZ_FORM_TITLES.TARGET, label: '対象' }
+];
 const VIZ_POST_THREAD_LINE = '内容とレビューはスレッドへ :point_down:';
 const VIZ_POST_MASTER_LINE = '{masters} レビューをお願いします :pray:';
 // 本文を親の投稿に載せていた頃の末尾の文。その頃の投稿を回答の編集で書き換えるときだけ使う
