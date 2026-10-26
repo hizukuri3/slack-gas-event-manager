@@ -187,18 +187,17 @@ function updateVizPost_(config, logSheet, answers, posted) {
 }
 
 /**
- * 親の投稿の本文。見出し・概要と対象（VIZ_PARENT_FIELDS。回答があるものだけ）・内容はスレッドにある旨の案内
+ * 親の投稿の本文。見出し（詳細はスレッドにある旨つき）と、概要・対象（VIZ_PARENT_FIELDS。回答があるものだけ）
  * @param {string} authorId 投稿者のSlackユーザーID（特定できなければ空文字）
  * @param {Object} answers 設問名 → 回答
  */
 function buildVizParentText_(authorId, answers) {
   const author = authorId ? '<@' + authorId + '>' : 'メンバー';
-  const lines = [VIZ_POST_HEADER.split('{author}').join(author)];
+  const lines = [VIZ_POST_PARENT_HEADER.split('{author}').join(author)];
   VIZ_PARENT_FIELDS.forEach(function (field) {
     const answer = answers && answers[field.question];
     if (answer) lines.push(field.label + ': ' + escapeSlackText_(answer));
   });
-  lines.push(VIZ_POST_THREAD_LINE);
   return lines.join('\n');
 }
 
