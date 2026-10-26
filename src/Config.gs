@@ -269,15 +269,16 @@ const VIZ_POST_FIELDS = [
   { question: VIZ_FORM_TITLES.CONSULT, label: '相談内容' }
 ];
 // {author} は投稿者のメンション（特定できなければ「メンバー」）。{masters} は師匠リストの有効な全員のメンション
-// 親の投稿は見出しと案内だけにして、回答の内容と師匠へのメンションはその返信（本文）に載せる。
+// 親の投稿は見出し（詳細はスレッドにある旨つき）と概要・対象だけにして、回答の内容と師匠へのメンションはその返信（本文）に載せる。
 // こうすると投稿に必ず返信が付き、レビューの書き込み先がスレッドだと最初から分かる
+const VIZ_POST_PARENT_HEADER = '{author} さんがVizのレビューを募集しています :eyes:（詳細はスレッドにて :point_down:）';
+// 本文を親の投稿に載せていた頃の見出し。その頃の投稿を回答の編集で書き換えるときだけ使う
 const VIZ_POST_HEADER = '{author} さんがVizのレビューを募集しています :eyes:';
 // 親の投稿に載せる回答（チャンネルの流れだけで、何の活動か分かるように）。回答が空・設問がフォームに無ければ、その行は出ない
 const VIZ_PARENT_FIELDS = [
   { question: VIZ_FORM_TITLES.SUMMARY, label: '概要' },
   { question: VIZ_FORM_TITLES.TARGET, label: '対象' }
 ];
-const VIZ_POST_THREAD_LINE = '内容とレビューはスレッドへ :point_down:';
 const VIZ_POST_MASTER_LINE = '{masters} レビューをお願いします :pray:';
 // 本文を親の投稿に載せていた頃の末尾の文。その頃の投稿を回答の編集で書き換えるときだけ使う
 const VIZ_POST_LEGACY_FOOTER = 'このスレッドでレビューをお待ちしています :bar_chart:';

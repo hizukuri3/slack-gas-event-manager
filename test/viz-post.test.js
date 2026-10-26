@@ -47,11 +47,11 @@ test('escapeSlackText_ は1つだけ定義され、null を空文字にする', 
   assert.equal(gas.ctx.escapeSlackText_('<!channel> & x'), '&lt;!channel&gt; &amp; x');
 });
 
-test('ナイスチャレンジの投稿: 親の投稿は見出し・概要・対象・案内', () => {
+test('ナイスチャレンジの投稿: 親の投稿は、詳細はスレッドにある旨つきの見出しと、概要・対象', () => {
   assert.equal(gas.ctx.buildVizParentText_('U111AAAA', {
     [T.SUMMARY]: '新人向けの売上ダッシュボードを作りました', [T.TARGET]: '組織内 Viz共有', [T.CONSULT]: '相談です'
-  }), '<@U111AAAA> さんがVizのレビューを募集しています :eyes:\n' +
-    '概要: 新人向けの売上ダッシュボードを作りました\n対象: 組織内 Viz共有\n内容とレビューはスレッドへ :point_down:');
+  }), '<@U111AAAA> さんがVizのレビューを募集しています :eyes:（詳細はスレッドにて :point_down:）\n' +
+    '概要: 新人向けの売上ダッシュボードを作りました\n対象: 組織内 Viz共有');
   assert.ok(gas.ctx.buildVizParentText_('', {}).startsWith('メンバー さんが'), '投稿者を特定できないときは「メンバー」');
 });
 
@@ -59,7 +59,7 @@ test('ナイスチャレンジの投稿: 親の投稿は、回答が無い行を
   const text = gas.ctx.buildVizParentText_('U111AAAA', { [T.SUMMARY]: 'A & <B>', [T.TARGET]: '' });
   assert.ok(text.includes('概要: A &amp; &lt;B&gt;'));
   assert.ok(!text.includes('対象'));
-  assert.equal(gas.ctx.buildVizParentText_('U111AAAA').split('\n').length, 2, '回答が無ければ見出しと案内だけ');
+  assert.equal(gas.ctx.buildVizParentText_('U111AAAA').split('\n').length, 1, '回答が無ければ見出しだけ');
 });
 
 test('ナイスチャレンジの投稿: 概要は本文の「概要」にも載り、フォームの概要の設問は必須で成果物のリンクの前にある', () => {
@@ -117,7 +117,7 @@ test('ナイスチャレンジの投稿の流れ: 親を出し、その返信に
   const calls = flow(['111.1', '222.2']);
   assert.equal(calls.posts.length, 2);
   assert.equal(calls.posts[0].threadTs, undefined);
-  assert.ok(calls.posts[0].text.includes('内容とレビューはスレッドへ'));
+  assert.ok(calls.posts[0].text.includes('（詳細はスレッドにて :point_down:）'));
   assert.ok(calls.posts[0].text.includes('概要: ひとこと'), '親に概要が載る');
   assert.equal(calls.posts[1].threadTs, '111.1', '本文は親のスレッドへ');
   assert.ok(calls.posts[1].text.includes('*所属部屋*'));
