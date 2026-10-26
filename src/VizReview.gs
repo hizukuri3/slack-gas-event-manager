@@ -103,9 +103,11 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
     return;
   }
 
+  // 親の投稿（見出しと案内だけ）を出し、その返信に本文を載せる。投稿に必ず返信が付くので、
+  // スレッドが最初から立ち、レビューの書き込み先が分かる。
   // 師匠は常に全員。メンション先は「師匠リスト」の有効な人（getConfig_ が読むプロパティの写し）
   const text = buildVizPostText_(answers, authorId, config.masterUserIds);
-  const messageTs = postVizMessage_(config, channelId, settings, text);
+  const messageTs = postVizMessage_(config, channelId, settings, buildVizParentText_(authorId, answers));
   if (!messageTs) {
     console.error('ナイスチャレンジの投稿に失敗しました（回答は削除していません）: ' + responseId);
     if (authorId) {
@@ -114,8 +116,20 @@ function postVizReviewRequest_(config, spreadsheet, settings, e) {
     }
     return;
   }
+  const bodyTs = postVizMessage_(config, channelId, settings, text, messageTs);
+  if (!bodyTs) {
+    // 親だけが残ると、中身のない募集が出てしまう。親を消して、投稿できなかったことにする
+    console.error('ナイスチャレンジの本文を投稿できませんでした（回答は削除していません）: ' + responseId);
+    const deleted = callSlackApi_(config, 'chat.delete', { channel: channelId, ts: messageTs });
+    if (!deleted.ok) console.error('ナイスチャレンジの親の投稿を削除できませんでした: ' + deleted.error);
+    if (authorId) {
+      sendDirectMessage_(config, authorId,
+        ':warning: ナイスチャレンジを投稿できませんでした。運営へ連絡してください。');
+    }
+    return;
+  }
 
-  const row = recordVizPost_(logSheet, authorId, text, channelId, messageTs, responseId);
+  const row = recordVizPost_(logSheet, authorId, text, channelId, messageTs, responseId, bodyTs);
 
   // 回答を残すのは、本人へ編集用URLを渡せるときだけ。渡せないなら、直す手段がないので消す。
   // ログに書けなかったとき（row が 0）は、編集も期限切れの削除もできなくなるので、同じくすぐ消す
@@ -142,9 +156,11 @@ function notifyVizAuthor_(config, authorId, formResponse, retentionDays) {
 function updateVizPost_(config, logSheet, answers, posted) {
   // 投稿者のメンションは、ログに残っているSlack IDで作り直す（本人不明なら「メンバー」）
   const authorId = posted.author === VIZ_AUTHOR_UNKNOWN ? '' : posted.author;
-  const text = buildVizPostText_(answers, authorId, config.masterUserIds);
+  const body = buildVizPostText_(answers, authorId, config.masterUserIds);
+  // 本文の返信IDが無い行は、本文を親の投稿に載せていた頃のもの。その形のまま親を書き換える
+  const text = posted.bodyTs ? body : buildVizLegacyPostText_(body, authorId);
   const json = callSlackApi_(config, 'chat.update', {
-    channel: posted.channel, ts: posted.messageTs, text: text
+    channel: posted.channel, ts: posted.bodyTs || posted.messageTs, text: text
   });
   if (!json.ok) {
     console.error('ナイスチャレンジの投稿を更新できませんでした: ' + json.error);
@@ -154,18 +170,46 @@ function updateVizPost_(config, logSheet, answers, posted) {
     }
     return;
   }
-  logSheet.getRange(posted.rowNumber, VIZ_LOG_COL.TEXT + 1).setValue(truncateForLog_(text));
+  logSheet.getRange(posted.rowNumber, VIZ_LOG_COL.TEXT + 1).setValue(truncateForLog_(body));
+
+  // 親の投稿にも概要と対象を載せているので、そちらも直す（旧形式の投稿は、上で親を書き換え済み）
+  if (!posted.bodyTs) return;
+  const parent = callSlackApi_(config, 'chat.update', {
+    channel: posted.channel, ts: posted.messageTs, text: buildVizParentText_(authorId, answers)
+  });
+  if (!parent.ok) {
+    console.error('ナイスチャレンジの親の投稿を更新できませんでした: ' + parent.error);
+    if (authorId) {
+      sendDirectMessage_(config, authorId,
+        ':warning: 回答の修正を投稿の見出しに反映できませんでした。運営へ連絡してください。');
+    }
+  }
 }
 
 /**
- * 冒頭文・各設問（VIZ_POST_FIELDS の順）・師匠へのメンション・末尾文をつないだ投稿本文を作る。
+ * 親の投稿の本文。見出し・概要と対象（VIZ_PARENT_FIELDS。回答があるものだけ）・内容はスレッドにある旨の案内
+ * @param {string} authorId 投稿者のSlackユーザーID（特定できなければ空文字）
+ * @param {Object} answers 設問名 → 回答
+ */
+function buildVizParentText_(authorId, answers) {
+  const author = authorId ? '<@' + authorId + '>' : 'メンバー';
+  const lines = [VIZ_POST_HEADER.split('{author}').join(author)];
+  VIZ_PARENT_FIELDS.forEach(function (field) {
+    const answer = answers && answers[field.question];
+    if (answer) lines.push(field.label + ': ' + escapeSlackText_(answer));
+  });
+  lines.push(VIZ_POST_THREAD_LINE);
+  return lines.join('\n');
+}
+
+/**
+ * スレッド内の本文。各設問（VIZ_POST_FIELDS の順）・師匠へのメンションをつなぐ。
  * 回答が空の設問は載せない。VIZ_POST_FIELDS に無い設問は、回答があれば設問名のまま末尾に足す
  * （フォームに設問を足したときに、回答が黙って投稿から消えないようにするため）。
  * @param {Object} answers 設問名 → 回答（フォームの並び順）
  */
 function buildVizPostText_(answers, authorId, masterIds) {
-  const author = authorId ? '<@' + authorId + '>' : 'メンバー';
-  const lines = [VIZ_POST_HEADER.split('{author}').join(author)];
+  const lines = [];
 
   const fixed = {};
   VIZ_POST_FIELDS.forEach(function (field) {
@@ -186,12 +230,20 @@ function buildVizPostText_(answers, authorId, masterIds) {
       return '<@' + id + '>';
     }).join(' ')));
   }
-  lines.push(VIZ_POST_FOOTER);
+  // Slack は空の本文を受け付けない
+  if (lines.length === 0) lines.push('（回答の内容がありませんでした）');
   return lines.join('\n\n');
 }
 
-function postVizMessage_(config, channelId, settings, text) {
+/** 本文を親の投稿に載せていた頃の形（見出し + 本文 + 末尾の文）。その頃の投稿を編集で書き換えるときだけ使う */
+function buildVizLegacyPostText_(body, authorId) {
+  const author = authorId ? '<@' + authorId + '>' : 'メンバー';
+  return [VIZ_POST_HEADER.split('{author}').join(author), body, VIZ_POST_LEGACY_FOOTER].join('\n\n');
+}
+
+function postVizMessage_(config, channelId, settings, text, threadTs) {
   const payload = { channel: channelId, text: text };
+  if (threadTs) payload.thread_ts = threadTs;
   if (settings.botName) payload.username = settings.botName;
   if (/^https?:\/\//.test(settings.botIcon)) {
     payload.icon_url = settings.botIcon;
@@ -219,7 +271,7 @@ function deleteVizResponse_(form, responseId) {
 }
 
 /** ナイスチャレンジ投稿ログへ1行足し、スタンプ数・返信数・返信した人数の数式を入れる。書いた行番号を返す（書けなければ 0） */
-function recordVizPost_(sheet, authorId, text, channelId, messageTs, responseId) {
+function recordVizPost_(sheet, authorId, text, channelId, messageTs, responseId, bodyTs) {
   const lock = LockService.getScriptLock();
   try {
     lock.waitLock(30000);
@@ -231,7 +283,7 @@ function recordVizPost_(sheet, authorId, text, channelId, messageTs, responseId)
     // 並びは VIZ_LOG_HEADER と一致させること。ts は数値化で桁が落ちるのでアポストロフィで文字列にする
     sheet.appendRow([
       new Date(), authorId || VIZ_AUTHOR_UNKNOWN, '', '', '',
-      truncateForLog_(text), channelId, "'" + messageTs, responseId, ''
+      truncateForLog_(text), channelId, "'" + messageTs, responseId, '', "'" + bodyTs
     ]);
     const row = sheet.getLastRow();
     const review = "'" + SHEET_VIZ_REVIEW_LOG + "'!";
@@ -258,20 +310,25 @@ function findVizPostByResponseId_(sheet, responseId) {
       rowNumber: i + 1,
       author: String(values[i][VIZ_LOG_COL.AUTHOR]),
       channel: String(values[i][VIZ_LOG_COL.CHANNEL]),
-      messageTs: String(values[i][VIZ_LOG_COL.MESSAGE_TS])
+      messageTs: String(values[i][VIZ_LOG_COL.MESSAGE_TS]),
+      bodyTs: String(values[i][VIZ_LOG_COL.BODY_TS] || '')
     };
   }
   return null;
 }
 
-/** ナイスチャレンジ投稿ログから、投稿メッセージのtsで投稿を探す。無ければ null */
+/**
+ * ナイスチャレンジ投稿ログから、投稿のtsで投稿を探す。無ければ null。
+ * 親の投稿と本文の返信のどちらのtsでも探せる（スタンプは、どちらにも付く）。messageTs は常に親の投稿のts
+ */
 function findVizPostByTs_(spreadsheet, messageTs) {
   const sheet = spreadsheet.getSheetByName(SHEET_VIZ_LOG);
   if (!sheet) return null;
   const values = sheet.getDataRange().getValues();
   for (let i = 1; i < values.length; i++) {
-    if (String(values[i][VIZ_LOG_COL.MESSAGE_TS]) !== messageTs) continue;
-    return { author: String(values[i][VIZ_LOG_COL.AUTHOR]) };
+    const bodyTs = String(values[i][VIZ_LOG_COL.BODY_TS] || '');
+    if (String(values[i][VIZ_LOG_COL.MESSAGE_TS]) !== messageTs && (!bodyTs || bodyTs !== messageTs)) continue;
+    return { author: String(values[i][VIZ_LOG_COL.AUTHOR]), messageTs: String(values[i][VIZ_LOG_COL.MESSAGE_TS]) };
   }
   return null;
 }
@@ -292,7 +349,8 @@ function handleVizReaction_(config, event) {
   if (!post || event.user === post.author) return;
 
   const emoji = normalizeEmojiName_(event.reaction);
-  const postTs = String(event.item.ts);
+  // 本文の返信に付いたスタンプも、親の投稿のものとして数える
+  const postTs = post.messageTs;
   const eventAt = new Date(Number(event.event_ts) * 1000);
   const sheet = getOrCreateSheet_(spreadsheet, SHEET_VIZ_REVIEW_LOG, VIZ_REVIEW_HEADER);
 
@@ -881,6 +939,8 @@ function vizFormSpec_() {
       help: 'あなたの所属する部屋を選択してください。投稿は師匠にもメンションされます。',
       choices: ['（「' + SHEET_MASTER_LIST + '」シートに師匠の表示名を入れてください）'] },
     { title: VIZ_FORM_TITLES.SECTION, type: 'PAGE_BREAK' },
+    { title: VIZ_FORM_TITLES.SUMMARY, type: 'TEXT', required: true,
+      help: '（記入例）新人向けの売上ダッシュボードを作りました。チャンネルの投稿に載ります。' },
     { title: VIZ_FORM_TITLES.LINK, type: 'TEXT', required: true },
     { title: VIZ_FORM_TITLES.TARGET, type: 'LIST', required: true, choices: [
       'パブリック Tableau PublicへのViz投稿',

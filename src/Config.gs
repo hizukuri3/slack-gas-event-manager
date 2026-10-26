@@ -248,6 +248,7 @@ const VIZ_FORM_TITLES = {
   AUTHOR: '投稿者のSlackユーザーID',
   ROOM: '所属部屋',
   SECTION: 'フィードバックを受けたい内容の記載',
+  SUMMARY: '活動の概要をひとことで！（※必須）',
   LINK: '成果物のリンクなどを記載してください（※必須）',
   TARGET: 'FB（フィードバック）を受けたい対象は？（※必須）',
   STATE: '成果物はどんな状態ですか？（※必須）',
@@ -260,6 +261,7 @@ const VIZ_FORM_TITLES = {
 // 設問名はフォームの設問と完全一致で結びつく。ここに無い設問は、回答があれば設問名のまま末尾に足される
 const VIZ_POST_FIELDS = [
   { question: VIZ_FORM_TITLES.ROOM, label: '所属部屋' },
+  { question: VIZ_FORM_TITLES.SUMMARY, label: '概要' },
   { question: VIZ_FORM_TITLES.LINK, label: '成果物のリンク' },
   { question: VIZ_FORM_TITLES.TARGET, label: 'FBを受けたい対象' },
   { question: VIZ_FORM_TITLES.STATE, label: '成果物の状態' },
@@ -267,9 +269,18 @@ const VIZ_POST_FIELDS = [
   { question: VIZ_FORM_TITLES.CONSULT, label: '相談内容' }
 ];
 // {author} は投稿者のメンション（特定できなければ「メンバー」）。{masters} は師匠リストの有効な全員のメンション
+// 親の投稿は見出しと案内だけにして、回答の内容と師匠へのメンションはその返信（本文）に載せる。
+// こうすると投稿に必ず返信が付き、レビューの書き込み先がスレッドだと最初から分かる
 const VIZ_POST_HEADER = '{author} さんがVizのレビューを募集しています :eyes:';
+// 親の投稿に載せる回答（チャンネルの流れだけで、何の活動か分かるように）。回答が空・設問がフォームに無ければ、その行は出ない
+const VIZ_PARENT_FIELDS = [
+  { question: VIZ_FORM_TITLES.SUMMARY, label: '概要' },
+  { question: VIZ_FORM_TITLES.TARGET, label: '対象' }
+];
+const VIZ_POST_THREAD_LINE = '内容とレビューはスレッドへ :point_down:';
 const VIZ_POST_MASTER_LINE = '{masters} レビューをお願いします :pray:';
-const VIZ_POST_FOOTER = 'このスレッドでレビューをお待ちしています :bar_chart:';
+// 本文を親の投稿に載せていた頃の末尾の文。その頃の投稿を回答の編集で書き換えるときだけ使う
+const VIZ_POST_LEGACY_FOOTER = 'このスレッドでレビューをお待ちしています :bar_chart:';
 
 // フォームの説明文の中で、設定シートのリンクに置き換わる印
 const VIZ_PLACEHOLDER_CHANNEL = '{ナイスチャレンジ}';
@@ -334,7 +345,7 @@ const VIZ_SETTING_ITEMS = [
 const VIZ_SETTINGS_HEADER = ['項目', '値', '説明'];
 
 // ---- ナイスチャレンジ投稿ログの列定義（0始まり）----
-// システムが書くシート。1回答（1投稿）で1行。スタンプ数・返信数は数式で、
+// システムが書くシート。1回答（1投稿）で1行。「投稿内容」は、スレッド内の本文の内容。スタンプ数・返信数は数式で、
 // ナイスチャレンジレビューログから「本人以外の、取り消されていないもの」だけを数える
 const VIZ_LOG_COL = {
   POSTED_AT: 0,      // 投稿日時
@@ -346,12 +357,13 @@ const VIZ_LOG_COL = {
   CHANNEL: 6,        // 投稿先チャンネルID
   MESSAGE_TS: 7,     // 投稿ID（投稿メッセージのts。レビューログの「投稿ID」と繋ぐキー）
   RESPONSE_ID: 8,    // フォームの回答ID（二重投稿の防止と、編集されたときの投稿の特定）
-  RESPONSE_DELETED_AT: 9  // フォームの回答を削除した日時。空ならまだフォームに残っている
+  RESPONSE_DELETED_AT: 9, // フォームの回答を削除した日時。空ならまだフォームに残っている
+  BODY_TS: 10        // 本文の返信ID（スレッド内の本文のts。空なら、本文を親の投稿に載せていた頃の投稿）
 };
 
 const VIZ_LOG_HEADER = [
   '投稿日時', '投稿者', 'スタンプ数', '返信数', '返信した人数',
-  '投稿内容', '投稿先チャンネルID', '投稿ID', 'フォーム回答ID', 'フォーム回答の削除日時'
+  '投稿内容', '投稿先チャンネルID', '投稿ID', 'フォーム回答ID', 'フォーム回答の削除日時', '本文の返信ID'
 ];
 
 // 投稿者を特定できなかったときの「投稿者」欄の値。この行では本人の除外ができない

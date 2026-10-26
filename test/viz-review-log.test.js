@@ -38,7 +38,7 @@ function setup() {
     getOrCreateSheet_: () => sheet,
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     getVizChannelId_: () => 'C1',
-    findVizPostForEvent_: () => ({ author: 'UAUTHOR1' })
+    findVizPostForEvent_: () => ({ author: 'UAUTHOR1', messageTs: '1760000000.000100' })
   });
   return { gas, ctx, sheet, COL: gas.get('VIZ_REVIEW_COL') };
 }
@@ -118,6 +118,13 @@ test('スタンプ: 行に、投稿者・投稿内容の数式が入る（返信
   assert.equal(sheet.rows[1][COL.KIND], 'スタンプ');
   assert.ok(!sheet.rows[1][COL.REPLY_TEXT]);
   assert.ok(sheet.formulas['2,' + (COL.POST_AUTHOR + 1)]);
+});
+
+test('スタンプ: 本文の返信に付いても、親の投稿IDで記録する', () => {
+  const { ctx, sheet, COL } = setup();
+  ctx.handleVizReaction_({}, { type: 'reaction_added', user: 'UREVIEW1', reaction: 'tada',
+    item: { channel: 'C1', ts: '1760000000.000200' }, event_ts: '1760000005.000100' });
+  assert.equal(sheet.rows[1][COL.POST_TS], '1760000000.000100');
 });
 
 test('これまでの行にも、数式を後から入れられる（何度実行しても同じ）', () => {
