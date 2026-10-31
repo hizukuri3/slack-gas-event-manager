@@ -108,6 +108,7 @@ clone したディレクトリで、GASプロジェクトと橋渡しする clas
 - `Quiz.gs` … 一問一答クイズ。毎時トリガーで「投稿時刻を過ぎていて今日まだ出していなければ出す」と判定する。出すかどうかの判定は純粋関数 `computeQuizSchedule_` に一本化してあり、実際の出題（`postQuizIfDue_`）と、「クイズ設定」の「次の出題」の表示（`refreshQuizNextLabel_`）で同じ判定を使う（お休み・出題を始める日・土日の扱いもここ）。リアクションは `EmojiReactionRelay.gs` の `handleSlackEvent_` から、絵文字転送とは独立に呼ばれる。
 - `VizReview.gs` … ナイスチャレンジ。投稿は、見出しと案内だけの親と、その返信に載せる本文の2つ（本文の投稿に失敗したら親を `chat.delete` する。投稿ログの「投稿ID」は親、「本文の返信ID」は本文。スタンプは `findVizPostByTs_` がどちらのtsでも親に引き当てる）。フォーム送信は `onFormSubmit` の先頭で `handleVizFormSubmit_` が送信元フォームを見て振り分ける（ナイスチャレンジ用フォームのIDは「ナイスチャレンジ設定」シートが正で、プロパティには持たない。編集トリガーが送信トリガーを追随させる）。スタンプは `handleSlackEvent_` から、返信（`message` イベント）も同じ入口から呼ばれる。投稿者の特定にはフォームのSlackユーザーIDを使う（`/review` が `SlashCommand.gs` の `handleVizSlashCommand_` で事前入力URLを返す。フォームIDと設問のエントリIDは、3秒ルールのためスクリプトプロパティ `VIZ_FORM_ID` / `VIZ_FORM_ENTRY_AUTHOR` に写してあり、`refreshVizPrefill_` が設定の編集時とセットアップ時に更新する）。フォームの回答は「ナイスチャレンジ設定」の日数だけ残し（編集URLをDM→編集は同じ回答IDで `onFormSubmit` が再度走り、`chat.update` でスレッド内の本文を更新。本文の返信IDが無い旧形式の投稿は親を更新）、`cleanupVizResponses`（毎日）が期限切れを削除する。フォームの説明文は「ナイスチャレンジ設定」のテンプレート（`{ナイスチャレンジ}` `{よくある質問}` を設定のリンクへ置換）から `applyVizFormTexts_` が書き込み、「所属部屋」の選択肢は「師匠リスト」の表示名から `syncVizRoomChoices_` が貼り直す（設定と師匠リストの編集トリガーから）。
 - `MasterList.gs` … 師匠リスト（管理用①のシート）→ スクリプトプロパティへの反映。シートが正で、プロパティは `/event` を3秒ルール内に収めるための読み取り用キャッシュ。
+- `SlackMembers.gs` … Slackメンバーの表示名とIDを「Slackメンバー一覧」シート（管理用①）へ書き出す。手動実行の `exportSlackMembers` のみで、トリガーは持たない。IDをキーに表示名だけ最新へ上書きし（変更前の名前は持たない）、退会者の行は残す。
 
 アーキテクチャ全体像とデータ構造は [README](../README.md) にあります。
 

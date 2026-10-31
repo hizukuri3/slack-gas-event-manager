@@ -202,6 +202,7 @@ flowchart LR
     ├── InteractionHandler.gs # ボタン押下・イベント受信の入口（予約・キャンセル・定員管理・繰り上げ）
     ├── CalendarService.gs   # カレンダー連携（Meet自動発行含む）
     ├── MasterList.gs        # 師匠リスト（管理用①のシートで師匠を管理・編集時に自動反映）
+    ├── SlackMembers.gs      # Slackメンバーの表示名とIDの一覧（手動実行でシートへ書き出し・ログの人別集計用）
     ├── VcRoom.gs            # Discord VCの部屋（VCルームリスト）の在庫管理と、イベントへの自動確保
     ├── WebApp.gs            # 参加者リアルタイム確認ページ（doGet）
     ├── EmojiReactionRelay.gs # スタンプ転送（絵文字リアクションでメッセージを別チャンネルへ）
