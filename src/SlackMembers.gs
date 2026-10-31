@@ -32,7 +32,12 @@ function exportSlackMembers() {
   const message = 'Slackメンバー一覧を更新しました: 追加 ' + merged.added +
     '名 / 表示名の変更 ' + merged.renamed + '名 / 合計 ' + merged.rows.length + '行';
   console.log(message);
-  spreadsheet.toast(message, SHEET_SLACK_MEMBERS, 8);
+  // GASエディタからの手動実行ではトーストを出せず例外になる。結果はログに出ているので無視する
+  try {
+    spreadsheet.toast(message, SHEET_SLACK_MEMBERS, 8);
+  } catch (err) {
+    // 画面に出せないだけ。書き込みは済んでいる
+  }
 }
 
 /**
