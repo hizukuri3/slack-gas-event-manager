@@ -168,3 +168,18 @@ test('通知頻度が空欄のとき: 7日以上は毎週月曜、7日未満は�
   assert.equal(freq(30, '毎日'), '毎日');
   assert.equal(freq(3, '毎週月曜'), '毎週月曜');
 });
+
+test('実行: 師匠リストの有効な師匠は、別の師匠のチャンネルでも対象にしない', () => {
+  const sent = [];
+  gas.stub({
+    resolveChannelId_: () => 'C1',
+    listChannelMemberIds_: () => ['UM', 'UOTHERM', 'U1'],
+    listRecentChannelMessages_: () => [],
+    sendDirectMessage_: (_c, id, text) => sent.push([id, text])
+  });
+  const people = [{ id: 'UM', name: '師匠A' }, { id: 'UOTHERM', name: '師匠B' }, { id: 'U1', name: 'はやし' }];
+  gas.ctx.runInactivityRule_({ masterUserIds: ['UM', 'UOTHERM'] },
+    { masterId: 'UM', channel: 'room', days: 7, excludeTokens: [] }, people, new Date());
+  assert.match(sent[0][1], /• はやし/);
+  assert.doesNotMatch(sent[0][1], /師匠B/);
+});
