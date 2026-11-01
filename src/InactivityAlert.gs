@@ -57,7 +57,7 @@ function setupInactivityAlertSheet_(sheet) {
     '誰の行か分かるためのメモ。処理には使いません',
     'チェックするチャンネル名（#なし）またはチャンネルID。公開チャンネルのみ。Botがそのチャンネルに参加している必要があります。必須',
     '「この日数以上、投稿・スレッド返信・スタンプがない人」を知らせます。例: 14。1以上の整数。必須',
-    '「毎日」か「毎週月曜」を選びます。空欄は毎日',
+    '「毎日」か「毎週月曜」を選びます。空欄なら日数で自動に決まります（' + INACTIVITY_WEEKLY_MIN_DAYS + '日以上は毎週月曜、未満は毎日）。毎週月曜は月曜の時点だけを見るので、日数が短いと週の途中の空白は拾えません',
     '通知に出したくない人（完全に離脱した人など）。通知に出た名前をそのまま書けます。SlackユーザーIDでもOK。複数はカンマか改行で区切ります。師匠本人とBotは自動で外れるので書かなくてOK',
     '「無効」にすると、この行の通知を止めます。空欄は有効',
     '自由記入。処理には使いません'
@@ -106,7 +106,8 @@ function checkInactiveDisciples() {
  * 動作確認用。「通知頻度」を無視して、今すぐ全ての有効な行を判定して通知する。
  * 「毎週月曜」の行も月曜を待たずに試せる。GASエディタから手動で実行する。
  * 時間トリガーには登録しない（トリガーは実行時に引数を渡すため、頻度を無視する指定を
- * 取り違えかねない。入口を分けているのはそのため）
+ * 取り違えかねない。入口を分けているのはそのため）。
+ * 該当者がいない行にも「いません」と返すので、動いているかをその場で確かめられる
  */
 function checkInactiveDisciplesNow() {
   runInactivityCheck_(true);
@@ -136,7 +137,7 @@ function runInactivityCheck_(ignoreFrequency) {
 
   dueRules.forEach(function (rule) {
     try {
-      runInactivityRule_(config, rule, members, now);
+      runInactivityRule_(config, rule, members, now, ignoreFrequency);
     } catch (err) {
       // 1行の失敗で他の師匠の通知を止めない
       console.error('離脱アラートに失敗しました（' + rule.channel + ' / ' + rule.masterId + '）: ' + err);
@@ -144,7 +145,12 @@ function runInactivityCheck_(ignoreFrequency) {
   });
 }
 
-function runInactivityRule_(config, rule, members, now) {
+/**
+ * 1行ぶんの判定と通知。
+ * @param {boolean} manual 手動実行か。手動のときだけ、該当者がいなくても「いません」と返す
+ *   （動いているのかを確かめるため。毎朝の自動実行は、該当者がいなければ何も送らない）
+ */
+function runInactivityRule_(config, rule, members, now, manual) {
   const masterId = rule.masterId;
   const excludeIds = [masterId];
   rule.excludeTokens.forEach(function (token) {
@@ -179,18 +185,24 @@ function runInactivityRule_(config, rule, members, now) {
   const humanIds = members.map(function (member) { return member.id; });
   const inactive = findInactiveMembers_(
     memberIds, humanIds, collectActiveUserIds_(messages), excludeIds);
-  if (inactive.length === 0) return;
+  const since = new Date(now.getTime() - rule.days * 86400000);
+  if (inactive.length === 0) {
+    if (manual) {
+      sendDirectMessage_(config, masterId, buildInactivityMessage_(channelId, rule.days, [], since));
+    }
+    return;
+  }
   const nameById = {};
   members.forEach(function (member) { nameById[member.id] = member.name; });
   const names = inactive.map(function (id) { return nameById[id] || id; });
-  sendDirectMessage_(config, masterId, buildInactivityMessage_(channelId, rule.days, names, new Date(now.getTime() - rule.days * 86400000)));
+  sendDirectMessage_(config, masterId, buildInactivityMessage_(channelId, rule.days, names, since));
 }
 
 /** 読めなかった理由を、その行の師匠へ知らせる。黙って通知が止まるのを防ぐため */
 function notifyInactivityProblem_(config, rule, masterId, reason) {
   console.error('離脱アラート: ' + reason + ' / ' + masterId);
   sendDirectMessage_(config, masterId,
-    ':warning: 離脱アラートを実行できませんでした（対象: ' + rule.channel + '）\n' + reason);
+    ':x: 離脱アラートを実行できませんでした（対象: ' + rule.channel + '）\n' + reason);
 }
 
 /**
@@ -223,7 +235,9 @@ function parseInactivityRules_(values) {
       problems.push(line + ': 日数は1以上の整数で入力してください（「' + daysRaw + '」）。この行は飛ばしました');
       return;
     }
-    const frequency = String(row[INACTIVITY_COL.FREQUENCY] || '').trim() || INACTIVITY_FREQUENCIES[0];
+    // 空欄は日数で決める。選んであればその値を優先する
+    const frequency = String(row[INACTIVITY_COL.FREQUENCY] || '').trim() ||
+      (days >= INACTIVITY_WEEKLY_MIN_DAYS ? '毎週月曜' : '毎日');
     if (INACTIVITY_FREQUENCIES.indexOf(frequency) === -1) {
       problems.push(line + ': 通知頻度は「' + INACTIVITY_FREQUENCIES.join('」「') +
         '」から選んでください（「' + frequency + '」）。この行は飛ばしました');
@@ -302,14 +316,17 @@ function normalizePersonName_(name) {
   return String(name || '').trim().replace(/^[@＠]/, '').trim().toLowerCase();
 }
 
-/** 通知文。名前の並びだけにして、メンションにはしない（師匠のDMに弟子の通知を飛ばさないため） */
+/** 通知文。該当者がいないとき（手動実行のみ）は「いません」の1行。名前の並びだけにして、メンションにはしない（師匠のDMに弟子の通知を飛ばさないため） */
 function buildInactivityMessage_(channelId, days, names, since) {
   const escape = function (text) {
     return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   };
+  const period = (since.getMonth() + 1) + '/' + since.getDate() + '〜今日の' + days + '日間';
+  if (names.length === 0) {
+    return ':white_check_mark: <#' + channelId + '> で、' + period + '、投稿・スレッド返信・スタンプがない方はいません';
+  }
   const lines = [
-    ':bell: <#' + channelId + '> で、' + (since.getMonth() + 1) + '/' + since.getDate() +
-      '〜今日の' + days + '日間、投稿・スレッド返信・スタンプがない方（' + names.length + '名）'
+    ':warning: <#' + channelId + '> で、' + period + '、投稿・スレッド返信・スタンプがない方（' + names.length + '名）'
   ];
   names.forEach(function (name) { lines.push('• ' + escape(name)); });
   lines.push('※ 通知に出したくない方は、「' + SHEET_INACTIVITY_ALERT +
