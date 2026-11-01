@@ -14,14 +14,14 @@ const row = (o) => [o.id ?? 'U11111', '', o.ch ?? 'room', o.days ?? 14, o.freq ?
 test('設定の読み取り: 必須3項目だけで読め、頻度は毎日・除外は空になる', () => {
   const r = plain(parse([row({})]));
   assert.deepEqual(r.problems, []);
-  assert.deepEqual(r.rules, [{ masterId: 'U11111', channel: 'room', days: 14, frequency: '毎日', excludeIds: [] }]);
+  assert.deepEqual(r.rules, [{ masterId: 'U11111', channel: 'room', days: 14, frequency: '毎日', excludeTokens: [] }]);
 });
 
-test('設定の読み取り: #付きチャンネル・<@U>形式・カンマ/改行区切りの除外を整える', () => {
-  const r = plain(parse([row({ id: '<@u11111>', ch: '#room', ex: '<@UAAA11>, UBBB22\nUCCC33' })]));
+test('設定の読み取り: #付きチャンネル・<@U>形式を整え、除外はカンマ/改行で区切る（表示名の空白は残す）', () => {
+  const r = plain(parse([row({ id: '<@u11111>', ch: '#room', ex: 'UAAA11, はやし\nlucia sai , ' })]));
   assert.equal(r.rules[0].masterId, 'U11111');
   assert.equal(r.rules[0].channel, 'room');
-  assert.deepEqual(r.rules[0].excludeIds, ['UAAA11', 'UBBB22', 'UCCC33']);
+  assert.deepEqual(r.rules[0].excludeTokens, ['UAAA11', 'はやし', 'lucia sai']);
 });
 
 test('設定の読み取り: 無効の行・空行は黙って飛ばす', () => {
@@ -64,14 +64,36 @@ test('通知頻度: 毎日は常に、毎週月曜は月曜だけ', () => {
   assert.equal(due('毎週月曜', tuesday), false);
 });
 
-test('通知文: 対象チャンネル・日数・人数・メンション・除外の案内を含む', () => {
-  const text = gas.ctx.buildInactivityMessage_('C1', 14, ['U2', 'U4']);
+test('通知文: 名前だけを並べ（メンションにしない）、記号は無害化し、除外の案内を含む', () => {
+  const text = gas.ctx.buildInactivityMessage_('C1', 14, ['はやし', 'a<b>&c'], new Date(2026, 10, 18));
   assert.match(text, /<#C1>/);
-  assert.match(text, /14日以上/);
+  assert.match(text, /11\/18〜今日の14日間/);
   assert.match(text, /2名/);
-  assert.match(text, /<@U2>/);
-  assert.match(text, /<@U4>/);
+  assert.match(text, /• はやし/);
+  assert.match(text, /• a&lt;b&gt;&amp;c/);
+  assert.doesNotMatch(text, /<@/);
   assert.match(text, /除外する人/);
+});
+
+const members = [
+  { id: 'U1AAAA', name: 'はやし' }, { id: 'U2BBBB', name: 'Saya' },
+  { id: 'U3CCCC', name: 'Dup' }, { id: 'U4DDDD', name: 'dup' }
+];
+
+test('人の特定: IDはそのまま、表示名はメンバー一覧から引く（@・空白・大文字小文字は無視）', () => {
+  const resolve = (t) => plain(gas.ctx.resolveSlackPerson_(t, members)).id;
+  assert.equal(resolve('<@U9ZZZZ>'), 'U9ZZZZ');
+  assert.equal(resolve('はやし'), 'U1AAAA');
+  assert.equal(resolve('@ saya '), 'U2BBBB');
+});
+
+test('人の特定: 見つからない・同名が複数のときは特定せず、理由を返す', () => {
+  const none = plain(gas.ctx.resolveSlackPerson_('いない人', members));
+  assert.equal(none.id, '');
+  assert.match(none.reason, /いません/);
+  const dup = plain(gas.ctx.resolveSlackPerson_('Dup', members));
+  assert.equal(dup.id, '');
+  assert.match(dup.reason, /複数/);
 });
 
 test('実行: 履歴が読めなかったら、誰にも通知せず師匠へ理由だけ送る', () => {
@@ -82,7 +104,7 @@ test('実行: 履歴が読めなかったら、誰にも通知せず師匠へ理
     listRecentChannelMessages_: () => null,
     sendDirectMessage_: (_c, id, text) => sent.push([id, text])
   });
-  gas.ctx.runInactivityRule_({}, { masterId: 'UM', channel: 'room', days: 7, excludeIds: [] }, ['U1'], new Date());
+  gas.ctx.runInactivityRule_({}, { masterId: 'UM', channel: 'room', days: 7, excludeTokens: [] }, [{ id: 'U1', name: 'A' }], new Date());
   assert.equal(sent.length, 1);
   assert.equal(sent[0][0], 'UM');
   assert.match(sent[0][1], /実行できませんでした/);
@@ -96,6 +118,24 @@ test('実行: 該当者がいなければ何も送らない', () => {
     listRecentChannelMessages_: () => [{ user: 'U1' }],
     sendDirectMessage_: (_c, id, text) => sent.push([id, text])
   });
-  gas.ctx.runInactivityRule_({}, { masterId: 'UM', channel: 'room', days: 7, excludeIds: [] }, ['U1'], new Date());
+  gas.ctx.runInactivityRule_({}, { masterId: 'UM', channel: 'room', days: 7, excludeTokens: [] }, [{ id: 'U1', name: 'A' }], new Date());
   assert.deepEqual(sent, []);
+});
+
+test('実行: 通知は表示名で出て、表示名で書かれた除外は外れる', () => {
+  const sent = [];
+  gas.stub({
+    resolveChannelId_: () => 'C1',
+    listChannelMemberIds_: () => ['UM', 'U1', 'U2', 'U3'],
+    listRecentChannelMessages_: () => [],
+    sendDirectMessage_: (_c, id, text) => sent.push([id, text])
+  });
+  const people = [{ id: 'UM', name: '師匠' }, { id: 'U1', name: 'はやし' },
+    { id: 'U2', name: 'のびー' }, { id: 'U3', name: 'しげる' }];
+  gas.ctx.runInactivityRule_({}, { masterId: 'UM', channel: 'room', days: 7, excludeTokens: ['のびー'] }, people, new Date());
+  assert.equal(sent.length, 1);
+  assert.match(sent[0][1], /• はやし/);
+  assert.match(sent[0][1], /• しげる/);
+  assert.doesNotMatch(sent[0][1], /のびー/);
+  assert.doesNotMatch(sent[0][1], /師匠/);
 });

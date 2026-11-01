@@ -48,6 +48,8 @@ function setupInactivityAlert() {
  * 右側の説明は表の外（J列〜）に置くので、設定の読み取りには影響しない。
  */
 function setupInactivityAlertSheet_(sheet) {
+  // 見出しの文言を変えたときに、稼働中のシートへ追随させる（ここは実行すると見出しを書き直す）
+  ensureHeader_(sheet, INACTIVITY_HEADER);
   setupInactivityDropdowns_(sheet);
 
   const notes = [
@@ -56,7 +58,7 @@ function setupInactivityAlertSheet_(sheet) {
     'チェックするチャンネル名（#なし）またはチャンネルID。公開チャンネルのみ。Botがそのチャンネルに参加している必要があります。必須',
     '「この日数以上、投稿・スレッド返信・スタンプがない人」を知らせます。例: 14。1以上の整数。必須',
     '「毎日」か「毎週月曜」を選びます。空欄は毎日',
-    '通知に出したくない人のSlackユーザーID。完全に離脱した人など。複数はカンマか改行で区切ります。師匠本人とBotは自動で外れるので書かなくてOK',
+    '通知に出したくない人（完全に離脱した人など）。通知に出た名前をそのまま書けます。SlackユーザーIDでもOK。複数はカンマか改行で区切ります。師匠本人とBotは自動で外れるので書かなくてOK',
     '「無効」にすると、この行の通知を止めます。空欄は有効',
     '自由記入。処理には使いません'
   ];
@@ -71,7 +73,7 @@ function setupInactivityAlertSheet_(sheet) {
     ['通知頻度: 「毎日」は毎朝、「毎週月曜」は月曜の朝だけ判定してDMします（月曜以外は何も届きません）'],
     ['判定は毎朝' + INACTIVITY_CHECK_HOUR + '時台。該当者がいない日は何も届きません'],
     ['対象は、そのチャンネルに参加している人（師匠本人・Bot・退会した人は除く）'],
-    ['完全に離脱した人は「除外する人」にIDを書くと、以降は通知に出ません'],
+    ['完全に離脱した人は、通知に出た名前を「除外する人」へそのまま書くと、以降は通知に出ません'],
     ['Botがチャンネルに入っていないと読めません。その場合は師匠にその旨のDMが届きます'],
     ['スタンプは、日数以内に投稿されたメッセージへのものだけ数えます（押した日時が取れないため）'],
     ['※ この説明は処理に使われません。消してもかまいません']
@@ -128,12 +130,13 @@ function runInactivityCheck_(ignoreFrequency) {
   });
   if (dueRules.length === 0) return;
 
-  // 人間のメンバー一覧（Bot・退会済みを除く）。ルールをまたいで1回だけ取る
-  const humanIds = listSlackMembers_(config).map(function (member) { return member.id; });
+  // 人間のメンバー一覧（Bot・退会済みを除く）。ルールをまたいで1回だけ取る。
+  // 判定の対象を絞るほか、通知に出す表示名と、設定シートの表示名の照合にも使う
+  const members = listSlackMembers_(config);
 
   dueRules.forEach(function (rule) {
     try {
-      runInactivityRule_(config, rule, humanIds, now);
+      runInactivityRule_(config, rule, members, now);
     } catch (err) {
       // 1行の失敗で他の師匠の通知を止めない
       console.error('離脱アラートに失敗しました（' + rule.channel + ' / ' + rule.masterId + '）: ' + err);
@@ -141,36 +144,52 @@ function runInactivityCheck_(ignoreFrequency) {
   });
 }
 
-function runInactivityRule_(config, rule, humanIds, now) {
+function runInactivityRule_(config, rule, members, now) {
+  const masterId = rule.masterId;
+  const excludeIds = [masterId];
+  rule.excludeTokens.forEach(function (token) {
+    const person = resolveSlackPerson_(token, members);
+    if (person.id) {
+      excludeIds.push(person.id);
+    } else {
+      console.warn('離脱アラート: 除外する人「' + token + '」を特定できないため、除外していません（' +
+        person.reason + '）。SlackユーザーIDで書いてください');
+    }
+  });
+
   const channelId = resolveChannelId_(config, rule.channel);
   if (!channelId) {
-    notifyInactivityProblem_(config, rule,
+    notifyInactivityProblem_(config, rule, masterId,
       'チャンネル「' + rule.channel + '」が見つかりません（公開チャンネルの名前かIDを確認してください）');
     return;
   }
 
   const memberIds = listChannelMemberIds_(config, channelId);
   if (memberIds === null) {
-    notifyInactivityProblem_(config, rule, 'チャンネルの参加者を取得できませんでした');
+    notifyInactivityProblem_(config, rule, masterId, 'チャンネルの参加者を取得できませんでした');
     return;
   }
   const messages = listRecentChannelMessages_(config, channelId, rule.days, now);
   if (messages === null) {
-    notifyInactivityProblem_(config, rule,
+    notifyInactivityProblem_(config, rule, masterId,
       'チャンネルの投稿を読めませんでした（Botをそのチャンネルに追加してください）');
     return;
   }
 
+  const humanIds = members.map(function (member) { return member.id; });
   const inactive = findInactiveMembers_(
-    memberIds, humanIds, collectActiveUserIds_(messages), rule.excludeIds.concat([rule.masterId]));
+    memberIds, humanIds, collectActiveUserIds_(messages), excludeIds);
   if (inactive.length === 0) return;
-  sendDirectMessage_(config, rule.masterId, buildInactivityMessage_(channelId, rule.days, inactive));
+  const nameById = {};
+  members.forEach(function (member) { nameById[member.id] = member.name; });
+  const names = inactive.map(function (id) { return nameById[id] || id; });
+  sendDirectMessage_(config, masterId, buildInactivityMessage_(channelId, rule.days, names, new Date(now.getTime() - rule.days * 86400000)));
 }
 
 /** 読めなかった理由を、その行の師匠へ知らせる。黙って通知が止まるのを防ぐため */
-function notifyInactivityProblem_(config, rule, reason) {
-  console.error('離脱アラート: ' + reason + ' / ' + rule.masterId);
-  sendDirectMessage_(config, rule.masterId,
+function notifyInactivityProblem_(config, rule, masterId, reason) {
+  console.error('離脱アラート: ' + reason + ' / ' + masterId);
+  sendDirectMessage_(config, masterId,
     ':warning: 離脱アラートを実行できませんでした（対象: ' + rule.channel + '）\n' + reason);
 }
 
@@ -210,12 +229,14 @@ function parseInactivityRules_(values) {
         '」から選んでください（「' + frequency + '」）。この行は飛ばしました');
       return;
     }
-    const excludeIds = String(row[INACTIVITY_COL.EXCLUDE] || '')
-      .split(/[,、\s]+/)
-      .map(normalizeSlackUserId_)
-      .filter(function (id) { return isValidSlackUserId_(id); });
+    // 表示名には空白が入りうるので、区切りはカンマと改行だけにする。
+    // IDか表示名かの判定は、メンバー一覧と突き合わせる実行時に行う
+    const excludeTokens = String(row[INACTIVITY_COL.EXCLUDE] || '')
+      .split(/[,、\n]+/)
+      .map(function (token) { return token.trim(); })
+      .filter(function (token) { return token !== ''; });
     rules.push({
-      masterId: masterId, channel: channel, days: days, frequency: frequency, excludeIds: excludeIds
+      masterId: masterId, channel: channel, days: days, frequency: frequency, excludeTokens: excludeTokens
     });
   });
   return { rules: rules, problems: problems };
@@ -256,13 +277,43 @@ function findInactiveMembers_(channelMemberIds, humanIds, activeIds, excludeIds)
   });
 }
 
-function buildInactivityMessage_(channelId, days, inactiveIds) {
+/**
+ * 設定シートに書かれた人（SlackユーザーID、または表示名）を、メンバー一覧からIDに解決する。
+ * 表示名で書く人がいるための対応。同じ表示名の人が複数いるときは、誰か決められないので解決しない。
+ * @return {{id: string, reason: string}} 解決できなければ id は空で、reason に理由
+ */
+function resolveSlackPerson_(token, members) {
+  const id = normalizeSlackUserId_(token);
+  if (isValidSlackUserId_(id)) return { id: id, reason: '' };
+
+  const key = normalizePersonName_(token);
+  const matches = members.filter(function (member) {
+    return normalizePersonName_(member.name) === key;
+  });
+  if (matches.length === 1) return { id: matches[0].id, reason: '' };
+  return {
+    id: '',
+    reason: matches.length === 0 ? '該当する表示名のメンバーがいません' : '同じ表示名のメンバーが複数います'
+  };
+}
+
+/** 表示名の照合用。先頭の@・前後の空白・大文字小文字の違いを無視する */
+function normalizePersonName_(name) {
+  return String(name || '').trim().replace(/^[@＠]/, '').trim().toLowerCase();
+}
+
+/** 通知文。名前の並びだけにして、メンションにはしない（師匠のDMに弟子の通知を飛ばさないため） */
+function buildInactivityMessage_(channelId, days, names, since) {
+  const escape = function (text) {
+    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  };
   const lines = [
-    ':bell: <#' + channelId + '> で ' + days + '日以上、投稿・スレッド返信・スタンプがない方（' +
-      inactiveIds.length + '名）'
+    ':bell: <#' + channelId + '> で、' + (since.getMonth() + 1) + '/' + since.getDate() +
+      '〜今日の' + days + '日間、投稿・スレッド返信・スタンプがない方（' + names.length + '名）'
   ];
-  inactiveIds.forEach(function (id) { lines.push('• <@' + id + '>'); });
-  lines.push('※ 通知に出したくない方は、「' + SHEET_INACTIVITY_ALERT + '」シートの「除外する人」に追加してください');
+  names.forEach(function (name) { lines.push('• ' + escape(name)); });
+  lines.push('※ 通知に出したくない方は、「' + SHEET_INACTIVITY_ALERT +
+    '」シートの「除外する人」に、上の名前をそのまま書いて追加してください');
   return lines.join('\n');
 }
 
