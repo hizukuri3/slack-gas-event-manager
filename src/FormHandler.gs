@@ -61,6 +61,8 @@ function setupTriggers() {
   // 師匠リストシートの内容をプロパティへ反映する。
   // プロパティで師匠を管理していた既存インスタンスは、ここで初回移行が走る
   syncMasterList();
+  // 離脱アラートのトリガーとシート。この機能の分しか触らないので、setupInactivityAlert() 単独でも実行できる
+  setupInactivityAlert();
   // ナイスチャレンジ用フォームの送信トリガーは、上の initializeSheets() 内の setupVizReview_ が登録し直す
   // （この関数の頭で onFormSubmit のトリガーを一度全部消しているため）
 }
