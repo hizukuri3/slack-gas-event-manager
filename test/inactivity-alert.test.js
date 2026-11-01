@@ -139,3 +139,26 @@ test('実行: 通知は表示名で出て、表示名で書かれた除外は外
   assert.doesNotMatch(sent[0][1], /のびー/);
   assert.doesNotMatch(sent[0][1], /師匠/);
 });
+
+test('実行: 手動実行のときだけ、該当者がいなくても「いません」と返す', () => {
+  const sent = [];
+  gas.stub({
+    resolveChannelId_: () => 'C1',
+    listChannelMemberIds_: () => ['U1'],
+    listRecentChannelMessages_: () => [{ user: 'U1' }],
+    sendDirectMessage_: (_c, id, text) => sent.push([id, text])
+  });
+  const rule = { masterId: 'UM', channel: 'room', days: 7, excludeTokens: [] };
+  gas.ctx.runInactivityRule_({}, rule, [{ id: 'U1', name: 'A' }], new Date(2026, 10, 25), true);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0][1], /11\/18〜今日の7日間/);
+  assert.match(sent[0][1], /いません/);
+});
+
+test('通知の絵文字: 該当者あり=:warning:、実行できなかった=:x:', () => {
+  assert.match(gas.ctx.buildInactivityMessage_('C1', 7, ['A'], new Date(2026, 10, 18)), /^:warning:/);
+  const sent = [];
+  gas.stub({ sendDirectMessage_: (_c, id, text) => sent.push(text) });
+  gas.ctx.notifyInactivityProblem_({}, { channel: 'room' }, 'UM', '理由');
+  assert.match(sent[0], /^:x:/);
+});
