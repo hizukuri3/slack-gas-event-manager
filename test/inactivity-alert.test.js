@@ -1,0 +1,101 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { loadGas, plain } = require('./harness');
+
+const gas = loadGas();
+const parse = gas.ctx.parseInactivityRules_;
+const collect = gas.ctx.collectActiveUserIds_;
+const findInactive = gas.ctx.findInactiveMembers_;
+const due = gas.ctx.isInactivityRuleDue_;
+
+// 列: 師匠ID, 表示名, チャンネル, 日数, 頻度, 除外, 有効, メモ
+const row = (o) => [o.id ?? 'U11111', '', o.ch ?? 'room', o.days ?? 14, o.freq ?? '', o.ex ?? '', o.en ?? '', ''];
+
+test('設定の読み取り: 必須3項目だけで読め、頻度は毎日・除外は空になる', () => {
+  const r = plain(parse([row({})]));
+  assert.deepEqual(r.problems, []);
+  assert.deepEqual(r.rules, [{ masterId: 'U11111', channel: 'room', days: 14, frequency: '毎日', excludeIds: [] }]);
+});
+
+test('設定の読み取り: #付きチャンネル・<@U>形式・カンマ/改行区切りの除外を整える', () => {
+  const r = plain(parse([row({ id: '<@u11111>', ch: '#room', ex: '<@UAAA11>, UBBB22\nUCCC33' })]));
+  assert.equal(r.rules[0].masterId, 'U11111');
+  assert.equal(r.rules[0].channel, 'room');
+  assert.deepEqual(r.rules[0].excludeIds, ['UAAA11', 'UBBB22', 'UCCC33']);
+});
+
+test('設定の読み取り: 無効の行・空行は黙って飛ばす', () => {
+  const r = plain(parse([row({ en: '無効' }), ['', '', '', '', '', '', '', '']]));
+  assert.deepEqual(r.rules, []);
+  assert.deepEqual(r.problems, []);
+});
+
+test('設定の読み取り: 不正な行は理由つきで飛ばす（何行目かが分かる）', () => {
+  const r = plain(parse([
+    row({ id: 'abc' }), row({ ch: '' }), row({ days: 0 }), row({ days: 'あ' }), row({ freq: '毎月' })
+  ]));
+  assert.deepEqual(r.rules, []);
+  assert.equal(r.problems.length, 5);
+  assert.match(r.problems[0], /^2行目/);
+  assert.match(r.problems[4], /^6行目/);
+});
+
+test('活動の集計: 投稿・スタンプ・返信を数え、入退室メッセージは数えない', () => {
+  const messages = [
+    { user: 'U1', text: 'hi' },
+    { user: 'U2', reactions: [{ name: 'x', users: ['U3', 'U4'] }] },
+    { user: 'U5', subtype: 'channel_join' }
+  ];
+  assert.deepEqual(plain(collect(messages)).sort(), ['U1', 'U2', 'U3', 'U4']);
+});
+
+test('対象者: 活動なし・除外・Bot/退会者・師匠本人を外し、参加者の並び順で返す', () => {
+  const members = ['UM', 'U1', 'U2', 'UBOT', 'U3', 'U4'];
+  const humans = ['UM', 'U1', 'U2', 'U3', 'U4'];
+  const result = findInactive(members, humans, ['U1'], ['U3', 'UM']);
+  assert.deepEqual(plain(result), ['U2', 'U4']);
+});
+
+test('通知頻度: 毎日は常に、毎週月曜は月曜だけ', () => {
+  const monday = new Date(2026, 10, 2);   // 2026-11-02 月曜
+  const tuesday = new Date(2026, 10, 3);
+  assert.equal(due('毎日', tuesday), true);
+  assert.equal(due('毎週月曜', monday), true);
+  assert.equal(due('毎週月曜', tuesday), false);
+});
+
+test('通知文: 対象チャンネル・日数・人数・メンション・除外の案内を含む', () => {
+  const text = gas.ctx.buildInactivityMessage_('C1', 14, ['U2', 'U4']);
+  assert.match(text, /<#C1>/);
+  assert.match(text, /14日以上/);
+  assert.match(text, /2名/);
+  assert.match(text, /<@U2>/);
+  assert.match(text, /<@U4>/);
+  assert.match(text, /除外する人/);
+});
+
+test('実行: 履歴が読めなかったら、誰にも通知せず師匠へ理由だけ送る', () => {
+  const sent = [];
+  gas.stub({
+    resolveChannelId_: () => 'C1',
+    listChannelMemberIds_: () => ['U1'],
+    listRecentChannelMessages_: () => null,
+    sendDirectMessage_: (_c, id, text) => sent.push([id, text])
+  });
+  gas.ctx.runInactivityRule_({}, { masterId: 'UM', channel: 'room', days: 7, excludeIds: [] }, ['U1'], new Date());
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0][0], 'UM');
+  assert.match(sent[0][1], /実行できませんでした/);
+});
+
+test('実行: 該当者がいなければ何も送らない', () => {
+  const sent = [];
+  gas.stub({
+    resolveChannelId_: () => 'C1',
+    listChannelMemberIds_: () => ['U1'],
+    listRecentChannelMessages_: () => [{ user: 'U1' }],
+    sendDirectMessage_: (_c, id, text) => sent.push([id, text])
+  });
+  gas.ctx.runInactivityRule_({}, { masterId: 'UM', channel: 'room', days: 7, excludeIds: [] }, ['U1'], new Date());
+  assert.deepEqual(sent, []);
+});
