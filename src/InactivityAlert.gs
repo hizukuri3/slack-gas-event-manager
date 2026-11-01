@@ -308,8 +308,8 @@ function buildInactivityMessage_(channelId, days, names, since) {
     return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   };
   const lines = [
-    ':bell: <#' + channelId + '> で ' + days + '日以上（' + (since.getMonth() + 1) + '/' + since.getDate() +
-      '以降）、投稿・スレッド返信・スタンプがない方（' + names.length + '名）'
+    ':bell: <#' + channelId + '> で、' + (since.getMonth() + 1) + '/' + since.getDate() +
+      '〜今日の' + days + '日間、投稿・スレッド返信・スタンプがない方（' + names.length + '名）'
   ];
   names.forEach(function (name) { lines.push('• ' + escape(name)); });
   lines.push('※ 通知に出したくない方は、「' + SHEET_INACTIVITY_ALERT +

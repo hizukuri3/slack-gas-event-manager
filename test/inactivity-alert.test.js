@@ -67,7 +67,7 @@ test('通知頻度: 毎日は常に、毎週月曜は月曜だけ', () => {
 test('通知文: 名前だけを並べ（メンションにしない）、記号は無害化し、除外の案内を含む', () => {
   const text = gas.ctx.buildInactivityMessage_('C1', 14, ['はやし', 'a<b>&c'], new Date(2026, 10, 18));
   assert.match(text, /<#C1>/);
-  assert.match(text, /14日以上（11\/18以降）/);
+  assert.match(text, /11\/18〜今日の14日間/);
   assert.match(text, /2名/);
   assert.match(text, /• はやし/);
   assert.match(text, /• a&lt;b&gt;&amp;c/);
