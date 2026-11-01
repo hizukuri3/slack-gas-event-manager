@@ -155,6 +155,16 @@ test('実行: 手動実行のときだけ、該当者がいなくても「いま
   assert.match(sent[0][1], /いません/);
 });
 
+test('通知文: 設定シートのURLがあればリンクにし、無ければ名前だけにする', () => {
+  const since = new Date(2026, 10, 18);
+  const url = 'https://docs.google.com/spreadsheets/d/XYZ/edit#gid=123';
+  const withLink = gas.ctx.buildInactivityMessage_('C1', 14, ['A'], since, url);
+  assert.ok(withLink.includes('<' + url + '|離脱アラート設定>シートの「除外する人」'));
+  const without = gas.ctx.buildInactivityMessage_('C1', 14, ['A'], since);
+  assert.ok(without.includes('「離脱アラート設定」シートの「除外する人」'));
+  assert.doesNotMatch(without, /docs\.google/);
+});
+
 test('通知の絵文字: 該当者あり=:warning:、実行できなかった=:x:', () => {
   assert.match(gas.ctx.buildInactivityMessage_('C1', 7, ['A'], new Date(2026, 10, 18)), /^:warning:/);
   const sent = [];
