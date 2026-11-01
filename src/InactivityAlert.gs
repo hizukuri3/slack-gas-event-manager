@@ -58,7 +58,7 @@ function setupInactivityAlertSheet_(sheet) {
     'チェックするチャンネル名（#なし）またはチャンネルID。公開チャンネルのみ。Botがそのチャンネルに参加している必要があります。必須',
     '「この日数以上、投稿・スレッド返信・スタンプがない人」を知らせます。例: 14。1以上の整数。必須',
     '「毎日」か「毎週月曜」を選びます。空欄なら日数で自動に決まります（' + INACTIVITY_WEEKLY_MIN_DAYS + '日以上は毎週月曜、未満は毎日）。毎週月曜は月曜の時点だけを見るので、日数が短いと週の途中の空白は拾えません',
-    '通知に出したくない人（完全に離脱した人など）。通知に出た名前をそのまま書けます。SlackユーザーIDでもOK。複数はカンマか改行で区切ります。師匠本人とBotは自動で外れるので書かなくてOK',
+    '通知に出したくない人（完全に離脱した人など）。通知に出た名前をそのまま書けます。SlackユーザーIDでもOK。複数はカンマか改行で区切ります。「師匠リスト」の有効な師匠とBotは自動で外れるので書かなくてOK',
     '「無効」にすると、この行の通知を止めます。空欄は有効',
     '自由記入。処理には使いません'
   ];
@@ -72,7 +72,7 @@ function setupInactivityAlertSheet_(sheet) {
     ['日数が過ぎても、投稿・スレッド返信・スタンプのどれもない人が、師匠にDMで届きます'],
     ['通知頻度: 「毎日」は毎朝、「毎週月曜」は月曜の朝だけ判定してDMします（月曜以外は何も届きません）'],
     ['判定は毎朝' + INACTIVITY_CHECK_HOUR + '時台。該当者がいないときも「いません」と届きます（動いているか分かるように）'],
-    ['対象は、そのチャンネルに参加している人（師匠本人・Bot・退会した人は除く）'],
+    ['対象は、そのチャンネルに参加している人（「師匠リスト」の有効な師匠・Bot・退会した人は除く）'],
     ['完全に離脱した人は、通知に出た名前を「除外する人」へそのまま書くと、以降は通知に出ません'],
     ['Botがチャンネルに入っていないと読めません。その場合は師匠にその旨のDMが届きます'],
     ['スタンプは、日数以内に投稿されたメッセージへのものだけ数えます（押した日時が取れないため）'],
@@ -154,7 +154,9 @@ function runInactivityCheck_(ignoreFrequency) {
  */
 function runInactivityRule_(config, rule, members, now, sheetUrl) {
   const masterId = rule.masterId;
-  const excludeIds = [masterId];
+  // 師匠リストの有効な師匠は、どのチャンネルでも対象にしない（別の師匠の部屋に入っている師匠がいるため）。
+  // 読むのは師匠リストのキャッシュ（スクリプトプロパティ）で、シートは読まない
+  const excludeIds = [masterId].concat(config.masterUserIds || []);
   rule.excludeTokens.forEach(function (token) {
     const person = resolveSlackPerson_(token, members);
     if (person.id) {
