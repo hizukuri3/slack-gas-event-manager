@@ -110,18 +110,6 @@ test('実行: 履歴が読めなかったら、誰にも通知せず師匠へ理
   assert.match(sent[0][1], /実行できませんでした/);
 });
 
-test('実行: 該当者がいなければ何も送らない', () => {
-  const sent = [];
-  gas.stub({
-    resolveChannelId_: () => 'C1',
-    listChannelMemberIds_: () => ['U1'],
-    listRecentChannelMessages_: () => [{ user: 'U1' }],
-    sendDirectMessage_: (_c, id, text) => sent.push([id, text])
-  });
-  gas.ctx.runInactivityRule_({}, { masterId: 'UM', channel: 'room', days: 7, excludeTokens: [] }, [{ id: 'U1', name: 'A' }], new Date());
-  assert.deepEqual(sent, []);
-});
-
 test('実行: 通知は表示名で出て、表示名で書かれた除外は外れる', () => {
   const sent = [];
   gas.stub({
@@ -140,7 +128,7 @@ test('実行: 通知は表示名で出て、表示名で書かれた除外は外
   assert.doesNotMatch(sent[0][1], /師匠/);
 });
 
-test('実行: 手動実行のときだけ、該当者がいなくても「いません」と返す', () => {
+test('実行: 該当者がいなければ、いない旨を返す', () => {
   const sent = [];
   gas.stub({
     resolveChannelId_: () => 'C1',
@@ -149,7 +137,7 @@ test('実行: 手動実行のときだけ、該当者がいなくても「いま
     sendDirectMessage_: (_c, id, text) => sent.push([id, text])
   });
   const rule = { masterId: 'UM', channel: 'room', days: 7, excludeTokens: [] };
-  gas.ctx.runInactivityRule_({}, rule, [{ id: 'U1', name: 'A' }], new Date(2026, 10, 25), true);
+  gas.ctx.runInactivityRule_({}, rule, [{ id: 'U1', name: 'A' }], new Date(2026, 10, 25));
   assert.equal(sent.length, 1);
   assert.match(sent[0][1], /11\/18〜今日の7日間/);
   assert.match(sent[0][1], /いません/);
