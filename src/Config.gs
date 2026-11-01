@@ -145,7 +145,7 @@ const INACTIVITY_COL = {
   CHANNEL: 2,     // 対象チャンネル（パブリックのみ。#なしの名前でもIDでも可）
   DAYS: 3,        // この日数以上、投稿・スレッド返信・スタンプがない人を知らせる
   FREQUENCY: 4,   // 通知頻度（INACTIVITY_FREQUENCIES から選ぶ。空欄は毎日）
-  EXCLUDE: 5,     // 除外する人のSlackユーザーID（完全離脱者など。カンマ・改行区切り）
+  EXCLUDE: 5,     // 除外する人（完全離脱者など。SlackユーザーIDか表示名。カンマ・改行区切り）
   ENABLED: 6,     // 有効（空欄も有効）
   NOTE: 7         // メモ（処理には使わない）
 };
@@ -156,7 +156,7 @@ const INACTIVITY_GUIDE_COLUMN = 10;    // 設定のしかたを書く列（J列�
 
 const INACTIVITY_HEADER = [
   '師匠のSlackユーザーID', '表示名', '対象チャンネル', '日数', '通知頻度',
-  '除外する人（IDをカンマ・改行区切り）', ENABLED_HEADER, 'メモ'
+  '除外する人（名前かID。カンマ・改行区切り）', ENABLED_HEADER, 'メモ'
 ];
 
 // ---- VCルームリストの列定義（0始まり）----
