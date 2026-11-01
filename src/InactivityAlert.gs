@@ -183,7 +183,7 @@ function runInactivityRule_(config, rule, members, now) {
   const nameById = {};
   members.forEach(function (member) { nameById[member.id] = member.name; });
   const names = inactive.map(function (id) { return nameById[id] || id; });
-  sendDirectMessage_(config, masterId, buildInactivityMessage_(channelId, rule.days, names));
+  sendDirectMessage_(config, masterId, buildInactivityMessage_(channelId, rule.days, names, new Date(now.getTime() - rule.days * 86400000)));
 }
 
 /** 読めなかった理由を、その行の師匠へ知らせる。黙って通知が止まるのを防ぐため */
@@ -303,13 +303,13 @@ function normalizePersonName_(name) {
 }
 
 /** 通知文。名前の並びだけにして、メンションにはしない（師匠のDMに弟子の通知を飛ばさないため） */
-function buildInactivityMessage_(channelId, days, names) {
+function buildInactivityMessage_(channelId, days, names, since) {
   const escape = function (text) {
     return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   };
   const lines = [
-    ':bell: <#' + channelId + '> で ' + days + '日以上、投稿・スレッド返信・スタンプがない方（' +
-      names.length + '名）'
+    ':bell: <#' + channelId + '> で ' + days + '日以上（' + (since.getMonth() + 1) + '/' + since.getDate() +
+      '以降）、投稿・スレッド返信・スタンプがない方（' + names.length + '名）'
   ];
   names.forEach(function (name) { lines.push('• ' + escape(name)); });
   lines.push('※ 通知に出したくない方は、「' + SHEET_INACTIVITY_ALERT +
