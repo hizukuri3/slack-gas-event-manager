@@ -71,7 +71,7 @@ function setupInactivityAlertSheet_(sheet) {
     ['必須は「師匠のSlackユーザーID」「対象チャンネル」「日数」の3つ。他は空欄でOK'],
     ['日数が過ぎても、投稿・スレッド返信・スタンプのどれもない人が、師匠にDMで届きます'],
     ['通知頻度: 「毎日」は毎朝、「毎週月曜」は月曜の朝だけ判定してDMします（月曜以外は何も届きません）'],
-    ['判定は毎朝' + INACTIVITY_CHECK_HOUR + '時台。該当者がいない日は何も届きません'],
+    ['判定は毎朝' + INACTIVITY_CHECK_HOUR + '時台。該当者がいないときも「いません」と届きます（動いているか分かるように）'],
     ['対象は、そのチャンネルに参加している人（師匠本人・Bot・退会した人は除く）'],
     ['完全に離脱した人は、通知に出た名前を「除外する人」へそのまま書くと、以降は通知に出ません'],
     ['Botがチャンネルに入っていないと読めません。その場合は師匠にその旨のDMが届きます'],
@@ -106,8 +106,7 @@ function checkInactiveDisciples() {
  * 動作確認用。「通知頻度」を無視して、今すぐ全ての有効な行を判定して通知する。
  * 「毎週月曜」の行も月曜を待たずに試せる。GASエディタから手動で実行する。
  * 時間トリガーには登録しない（トリガーは実行時に引数を渡すため、頻度を無視する指定を
- * 取り違えかねない。入口を分けているのはそのため）。
- * 該当者がいない行にも「いません」と返すので、動いているかをその場で確かめられる
+ * 取り違えかねない。入口を分けているのはそのため）
  */
 function checkInactiveDisciplesNow() {
   runInactivityCheck_(true);
@@ -141,7 +140,7 @@ function runInactivityCheck_(ignoreFrequency) {
 
   dueRules.forEach(function (rule) {
     try {
-      runInactivityRule_(config, rule, members, now, ignoreFrequency, sheetUrl);
+      runInactivityRule_(config, rule, members, now, sheetUrl);
     } catch (err) {
       // 1行の失敗で他の師匠の通知を止めない
       console.error('離脱アラートに失敗しました（' + rule.channel + ' / ' + rule.masterId + '）: ' + err);
@@ -150,12 +149,10 @@ function runInactivityCheck_(ignoreFrequency) {
 }
 
 /**
- * 1行ぶんの判定と通知。
+ * 1行ぶんの判定と通知。該当者がいなければ、いない旨を送る。
  * @param {string} sheetUrl 通知の案内に載せる、設定シートのURL（省略可）
- * @param {boolean} manual 手動実行か。手動のときだけ、該当者がいなくても「いません」と返す
- *   （動いているのかを確かめるため。毎朝の自動実行は、該当者がいなければ何も送らない）
  */
-function runInactivityRule_(config, rule, members, now, manual, sheetUrl) {
+function runInactivityRule_(config, rule, members, now, sheetUrl) {
   const masterId = rule.masterId;
   const excludeIds = [masterId];
   rule.excludeTokens.forEach(function (token) {
@@ -192,9 +189,9 @@ function runInactivityRule_(config, rule, members, now, manual, sheetUrl) {
     memberIds, humanIds, collectActiveUserIds_(messages), excludeIds);
   const since = new Date(now.getTime() - rule.days * 86400000);
   if (inactive.length === 0) {
-    if (manual) {
-      sendDirectMessage_(config, masterId, buildInactivityMessage_(channelId, rule.days, [], since));
-    }
+    // 何も届かないと「該当者がいない」のか「動いていない」のか区別できないので、いない旨も送る。
+    // 届く頻度は「通知頻度」の設定に従う
+    sendDirectMessage_(config, masterId, buildInactivityMessage_(channelId, rule.days, [], since));
     return;
   }
   const nameById = {};
@@ -321,7 +318,7 @@ function normalizePersonName_(name) {
   return String(name || '').trim().replace(/^[@＠]/, '').trim().toLowerCase();
 }
 
-/** 通知文。該当者がいないとき（手動実行のみ）は「いません」の1行。名前の並びだけにして、メンションにはしない（師匠のDMに弟子の通知を飛ばさないため） */
+/** 通知文。該当者がいないときは「いません」の1行。名前の並びだけにして、メンションにはしない（師匠のDMに弟子の通知を飛ばさないため） */
 function buildInactivityMessage_(channelId, days, names, since, sheetUrl) {
   const escape = function (text) {
     return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
