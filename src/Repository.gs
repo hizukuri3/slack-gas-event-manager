@@ -112,6 +112,11 @@ function onManagementSpreadsheetEdit(e) {
     syncVizRoomsFromSheet_(e.source);
     return;
   }
+  if (name === SHEET_INACTIVITY_ALERT) {
+    // 設定は実行のたびにシートを直接読むので、反映処理は不要。行を足したときのドロップダウンだけ整える
+    setupInactivityDropdowns_(e.range.getSheet());
+    return;
+  }
   if (name === SHEET_VIZ_SETTINGS) {
     // フォームIDが変わったら、送信トリガーをその場で追随させる
     syncVizSettings_(e.source);
