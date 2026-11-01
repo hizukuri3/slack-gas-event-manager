@@ -125,6 +125,10 @@ function runInactivityCheck_(ignoreFrequency) {
     console.warn('離脱アラート設定の ' + problem);
   });
 
+  // 通知の案内から、設定シートを直接開けるようにする
+  const sheetUrl = 'https://docs.google.com/spreadsheets/d/' + config.managementSpreadsheetId +
+    '/edit#gid=' + sheet.getSheetId();
+
   const now = new Date();
   const dueRules = parsed.rules.filter(function (rule) {
     return ignoreFrequency || isInactivityRuleDue_(rule.frequency, now);
@@ -137,7 +141,7 @@ function runInactivityCheck_(ignoreFrequency) {
 
   dueRules.forEach(function (rule) {
     try {
-      runInactivityRule_(config, rule, members, now, ignoreFrequency);
+      runInactivityRule_(config, rule, members, now, ignoreFrequency, sheetUrl);
     } catch (err) {
       // 1行の失敗で他の師匠の通知を止めない
       console.error('離脱アラートに失敗しました（' + rule.channel + ' / ' + rule.masterId + '）: ' + err);
@@ -147,10 +151,11 @@ function runInactivityCheck_(ignoreFrequency) {
 
 /**
  * 1行ぶんの判定と通知。
+ * @param {string} sheetUrl 通知の案内に載せる、設定シートのURL（省略可）
  * @param {boolean} manual 手動実行か。手動のときだけ、該当者がいなくても「いません」と返す
  *   （動いているのかを確かめるため。毎朝の自動実行は、該当者がいなければ何も送らない）
  */
-function runInactivityRule_(config, rule, members, now, manual) {
+function runInactivityRule_(config, rule, members, now, manual, sheetUrl) {
   const masterId = rule.masterId;
   const excludeIds = [masterId];
   rule.excludeTokens.forEach(function (token) {
@@ -195,7 +200,7 @@ function runInactivityRule_(config, rule, members, now, manual) {
   const nameById = {};
   members.forEach(function (member) { nameById[member.id] = member.name; });
   const names = inactive.map(function (id) { return nameById[id] || id; });
-  sendDirectMessage_(config, masterId, buildInactivityMessage_(channelId, rule.days, names, since));
+  sendDirectMessage_(config, masterId, buildInactivityMessage_(channelId, rule.days, names, since, sheetUrl));
 }
 
 /** 読めなかった理由を、その行の師匠へ知らせる。黙って通知が止まるのを防ぐため */
@@ -317,7 +322,7 @@ function normalizePersonName_(name) {
 }
 
 /** 通知文。該当者がいないとき（手動実行のみ）は「いません」の1行。名前の並びだけにして、メンションにはしない（師匠のDMに弟子の通知を飛ばさないため） */
-function buildInactivityMessage_(channelId, days, names, since) {
+function buildInactivityMessage_(channelId, days, names, since, sheetUrl) {
   const escape = function (text) {
     return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   };
@@ -329,8 +334,9 @@ function buildInactivityMessage_(channelId, days, names, since) {
     ':warning: <#' + channelId + '> で、' + period + '、投稿・スレッド返信・スタンプがない方（' + names.length + '名）'
   ];
   names.forEach(function (name) { lines.push('• ' + escape(name)); });
-  lines.push('※ 通知に出したくない方は、「' + SHEET_INACTIVITY_ALERT +
-    '」シートの「除外する人」に、上の名前をそのまま書いて追加してください');
+  const sheetLabel = sheetUrl ? '<' + sheetUrl + '|' + SHEET_INACTIVITY_ALERT + '>' : '「' + SHEET_INACTIVITY_ALERT + '」';
+  lines.push('※ 通知に出したくない方は、' + sheetLabel +
+    'シートの「除外する人」に、上の名前をそのまま書いて追加してください');
   return lines.join('\n');
 }
 
