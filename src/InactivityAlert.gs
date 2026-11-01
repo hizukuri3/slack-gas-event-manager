@@ -57,7 +57,7 @@ function setupInactivityAlertSheet_(sheet) {
     '誰の行か分かるためのメモ。処理には使いません',
     'チェックするチャンネル名（#なし）またはチャンネルID。公開チャンネルのみ。Botがそのチャンネルに参加している必要があります。必須',
     '「この日数以上、投稿・スレッド返信・スタンプがない人」を知らせます。例: 14。1以上の整数。必須',
-    '「毎日」か「毎週月曜」を選びます。空欄は毎日。日数が7日以上なら「毎週月曜」、7日未満なら「毎日」が目安です（毎週月曜は月曜の時点だけを見るので、週の途中の空白は拾えません）',
+    '「毎日」か「毎週月曜」を選びます。空欄なら日数で自動に決まります（' + INACTIVITY_WEEKLY_MIN_DAYS + '日以上は毎週月曜、未満は毎日）。毎週月曜は月曜の時点だけを見るので、日数が短いと週の途中の空白は拾えません',
     '通知に出したくない人（完全に離脱した人など）。通知に出た名前をそのまま書けます。SlackユーザーIDでもOK。複数はカンマか改行で区切ります。師匠本人とBotは自動で外れるので書かなくてOK',
     '「無効」にすると、この行の通知を止めます。空欄は有効',
     '自由記入。処理には使いません'
@@ -235,7 +235,9 @@ function parseInactivityRules_(values) {
       problems.push(line + ': 日数は1以上の整数で入力してください（「' + daysRaw + '」）。この行は飛ばしました');
       return;
     }
-    const frequency = String(row[INACTIVITY_COL.FREQUENCY] || '').trim() || INACTIVITY_FREQUENCIES[0];
+    // 空欄は日数で決める。選んであればその値を優先する
+    const frequency = String(row[INACTIVITY_COL.FREQUENCY] || '').trim() ||
+      (days >= INACTIVITY_WEEKLY_MIN_DAYS ? '毎週月曜' : '毎日');
     if (INACTIVITY_FREQUENCIES.indexOf(frequency) === -1) {
       problems.push(line + ': 通知頻度は「' + INACTIVITY_FREQUENCIES.join('」「') +
         '」から選んでください（「' + frequency + '」）。この行は飛ばしました');

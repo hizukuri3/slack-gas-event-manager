@@ -144,13 +144,16 @@ const INACTIVITY_COL = {
   NAME: 1,        // 表示名（誰の行か分かるようにするためのメモ。処理には使わない）
   CHANNEL: 2,     // 対象チャンネル（パブリックのみ。#なしの名前でもIDでも可）
   DAYS: 3,        // この日数以上、投稿・スレッド返信・スタンプがない人を知らせる
-  FREQUENCY: 4,   // 通知頻度（INACTIVITY_FREQUENCIES から選ぶ。空欄は毎日）
+  FREQUENCY: 4,   // 通知頻度（INACTIVITY_FREQUENCIES から選ぶ。空欄は日数で決まる: INACTIVITY_WEEKLY_MIN_DAYS 以上なら毎週月曜、未満なら毎日）
   EXCLUDE: 5,     // 除外する人（完全離脱者など。SlackユーザーIDか表示名。カンマ・改行区切り）
   ENABLED: 6,     // 有効（空欄も有効）
   NOTE: 7         // メモ（処理には使わない）
 };
 
 const INACTIVITY_FREQUENCIES = ['毎日', '毎週月曜'];
+// 通知頻度が空欄のとき、この日数以上なら「毎週月曜」、未満なら「毎日」にする。
+// 「毎週月曜」は月曜の時点だけを見るので、7日未満だと週の途中の空白を拾えず、通知も最大6日遅れるため
+const INACTIVITY_WEEKLY_MIN_DAYS = 7;
 const INACTIVITY_CHECK_HOUR = 9;       // 判定する時刻（時間トリガーなので、この時台のどこかで動く）
 const INACTIVITY_GUIDE_COLUMN = 10;    // 設定のしかたを書く列（J列）。表の右に空き列を1つ置く
 

@@ -11,10 +11,10 @@ const due = gas.ctx.isInactivityRuleDue_;
 // 列: 師匠ID, 表示名, チャンネル, 日数, 頻度, 除外, 有効, メモ
 const row = (o) => [o.id ?? 'U11111', '', o.ch ?? 'room', o.days ?? 14, o.freq ?? '', o.ex ?? '', o.en ?? '', ''];
 
-test('設定の読み取り: 必須3項目だけで読め、頻度は毎日・除外は空になる', () => {
+test('設定の読み取り: 必須3項目だけで読め、頻度は日数で決まり、除外は空になる', () => {
   const r = plain(parse([row({})]));
   assert.deepEqual(r.problems, []);
-  assert.deepEqual(r.rules, [{ masterId: 'U11111', channel: 'room', days: 14, frequency: '毎日', excludeTokens: [] }]);
+  assert.deepEqual(r.rules, [{ masterId: 'U11111', channel: 'room', days: 14, frequency: '毎週月曜', excludeTokens: [] }]);
 });
 
 test('設定の読み取り: #付きチャンネル・<@U>形式を整え、除外はカンマ/改行で区切る（表示名の空白は残す）', () => {
@@ -161,4 +161,12 @@ test('通知の絵文字: 該当者あり=:warning:、実行できなかった=:
   gas.stub({ sendDirectMessage_: (_c, id, text) => sent.push(text) });
   gas.ctx.notifyInactivityProblem_({}, { channel: 'room' }, 'UM', '理由');
   assert.match(sent[0], /^:x:/);
+});
+
+test('通知頻度が空欄のとき: 7日以上は毎週月曜、7日未満は毎日。選んであればそれを優先する', () => {
+  const freq = (days, f) => plain(parse([row({ days, freq: f })])).rules[0].frequency;
+  assert.equal(freq(7, ''), '毎週月曜');
+  assert.equal(freq(6, ''), '毎日');
+  assert.equal(freq(30, '毎日'), '毎日');
+  assert.equal(freq(3, '毎週月曜'), '毎週月曜');
 });
